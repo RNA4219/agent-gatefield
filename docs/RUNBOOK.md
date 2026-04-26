@@ -29,13 +29,13 @@ This runbook provides operational guidance for running, monitoring, and troubles
 **Implementation Metrics:**
 - NotImplementedError: 0 (all resolved)
 - TODO items: 0 (all resolved)
-- Tests: 1014/1014 passed (100%)
-- Coverage: 77% (target: 90%)
+- Tests: 1180 passed (100%)
+- Coverage: 78% (target: 90%)
 - Python files: 72
-- Test files: 24
+- Test files: 32
 - Mock cleanup: @patch 154→0, Mock() 157→0 (100% reduction)
 - Complexity reduction: 215→165 (23% reduction)
-- Completion: 85%
+- Completion: 87%
 
 **Coverage Improvements:**
 | Module | Before | After | Tests Added |
@@ -48,6 +48,13 @@ This runbook provides operational guidance for running, monitoring, and troubles
 | qdrant_store | 41% | 65% | 29 |
 | scorers/base | 59% | 98% | 21 |
 | vector_store/__init__ | 53% | 100% | 17 |
+| harness facade | 0% | 100% | 31 |
+| promotion | 57% | 100% | 41 |
+| escalation | 68% | 99% | 50 |
+| pairwise | 61% | 100% | 33 |
+| review/sla_handler | 76% | 100% | 22 |
+| self_correction | 68% | 96% | 38 |
+| review/queue | 72% | 82% | 81 |
 | embedding_worker | 33% | 41% | 27 |
 | online_calibration | 26% | 97% | 35 |
 | drift_detection | 57% | 100% | 30 |
