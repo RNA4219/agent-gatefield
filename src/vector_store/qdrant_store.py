@@ -9,7 +9,8 @@ import logging
 import os
 from typing import List, Optional, Dict, Any, Union
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
+import hashlib
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -105,14 +106,15 @@ class QdrantVectorStore:
 
             # Create client
             if self.location == ":memory:":
-                self._client = QdrantClient(location=":memory:")
+                self._client = QdrantClient(location=":memory:", check_compatibility=False)
             elif self.url:
-                self._client = QdrantClient(url=self.url, prefer_grpc=True)
+                self._client = QdrantClient(url=self.url, prefer_grpc=True, check_compatibility=False)
             else:
                 self._client = QdrantClient(
                     host=self.host,
                     port=self.port,
-                    prefer_grpc=True
+                    prefer_grpc=True,
+                    check_compatibility=False,
                 )
 
             # Create collection if not exists
@@ -174,7 +176,7 @@ class QdrantVectorStore:
             return self._mock_search(axis_type, limit)
 
         try:
-            from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+            from qdrant_client.http.models import QueryRequest, Filter, FieldCondition, MatchValue
 
             # Build filter
             conditions = [
@@ -186,29 +188,36 @@ class QdrantVectorStore:
 
             filter_obj = Filter(must=conditions)
 
-            # Search
-            results = self._client.search(
-                collection_name=self.collection_name,
-                query_vector=query_vector,
-                query_filter=filter_obj,
+            # Use new query_batch_points API (qdrant-client 1.17+)
+            request = QueryRequest(
+                query=query_vector,
+                filter=filter_obj,
                 limit=limit,
-                score_threshold=min_score
+                with_payload=True
+            )
+
+            results = self._client.query_batch_points(
+                collection_name=self.collection_name,
+                requests=[request]
             )
 
             # Convert to SearchResult
             search_results = []
-            for hit in results:
-                payload = hit.payload or {}
-                search_results.append(SearchResult(
-                    doc_id=str(hit.id),
-                    similarity=hit.score,
-                    axis_type=payload.get('axis_type', axis_type),
-                    text=payload.get('text', ''),
-                    labels=payload.get('labels'),
-                    source_type=payload.get('source_type'),
-                    scope=payload.get('scope'),
-                    version=payload.get('version'),
-                ))
+            for response in results:
+                for hit in response.points:
+                    if min_score and hit.score < min_score:
+                        continue
+                    payload = hit.payload or {}
+                    search_results.append(SearchResult(
+                        doc_id=str(hit.id),
+                        similarity=hit.score,
+                        axis_type=payload.get('axis_type') or payload.get('axis') or axis_type,
+                        text=payload.get('text', ''),
+                        labels=payload.get('labels'),
+                        source_type=payload.get('source_type') or payload.get('source'),
+                        scope=payload.get('scope'),
+                        version=payload.get('version'),
+                    ))
 
             return search_results
 
@@ -248,19 +257,24 @@ class QdrantVectorStore:
             doc_id = doc_id or str(uuid.uuid4())
 
             # Payload with all required metadata per RUNBOOK
+            content_hash = hashlib.sha256(text.encode('utf-8')).hexdigest()
             payload = {
+                'doc_id': doc_id,
+                'axis': axis_type,
                 'axis_type': axis_type,
                 'text': text,
                 'labels': labels or {},
                 'scope': scope,
+                'source': source_type,
                 'source_type': source_type,
                 'model': 'BAAI/bge-m3',  # per RUNBOOK
                 'dims': self.embedding_dims,
+                'content_hash': content_hash,
                 'dataset_version': 'v1.0.0',
                 'redaction_status': 'verified',
                 'status': 'active',
                 'version': 1,
-                'created_at': datetime.utcnow().isoformat(),
+                'created_at': datetime.now(timezone.utc).isoformat(),
             }
 
             from qdrant_client.http.models import PointStruct
@@ -306,21 +320,29 @@ class QdrantVectorStore:
             doc_ids = []
             for i, (doc, emb) in enumerate(zip(documents, embeddings)):
                 doc_id = doc.get('doc_id') or str(uuid.uuid4())
+                axis_type = doc.get('axis_type') or doc.get('axis')
+                source_type = doc.get('source_type') or doc.get('source') or 'import'
+                text = doc.get('text', '')
+                content_hash = doc.get('content_hash') or hashlib.sha256(text.encode('utf-8')).hexdigest()
                 doc_ids.append(doc_id)
 
                 payload = {
-                    'axis_type': doc.get('axis_type'),
-                    'text': doc.get('text', ''),
+                    'doc_id': doc_id,
+                    'axis': axis_type,
+                    'axis_type': axis_type,
+                    'text': text,
                     'labels': doc.get('labels', {}),
                     'scope': doc.get('scope'),
-                    'source_type': doc.get('source_type', 'import'),
+                    'source': source_type,
+                    'source_type': source_type,
                     'model': 'BAAI/bge-m3',
                     'dims': self.embedding_dims,
+                    'content_hash': content_hash,
                     'dataset_version': 'v1.0.0',
                     'redaction_status': 'verified',
                     'status': 'active',
                     'version': 1,
-                    'created_at': datetime.utcnow().isoformat(),
+                    'created_at': datetime.now(timezone.utc).isoformat(),
                 }
 
                 points.append(PointStruct(
@@ -350,7 +372,7 @@ class QdrantVectorStore:
 
             self._client.set_payload(
                 collection_name=self.collection_name,
-                payload={'status': 'deprecated', 'updated_at': datetime.utcnow().isoformat()},
+                payload={'status': 'deprecated', 'updated_at': datetime.now(timezone.utc).isoformat()},
                 points=[doc_id]
             )
             return True
@@ -403,15 +425,22 @@ class QdrantVectorStore:
 
         try:
             info = self._client.get_collection(self.collection_name)
-            return {
+            result = {
                 'status': info.status.value,
                 'points_count': info.points_count,
-                'vectors_count': info.vectors_count,
-                'config': {
-                    'dimensions': info.config.params.vectors.size,
-                    'distance': info.config.params.vectors.distance.value,
-                }
+                'config': {},
             }
+            # Safely access config (API varies by version)
+            try:
+                if hasattr(info.config, 'params') and hasattr(info.config.params, 'vectors'):
+                    vectors_config = info.config.params.vectors
+                    if hasattr(vectors_config, 'size'):
+                        result['config']['dimensions'] = vectors_config.size
+                    if hasattr(vectors_config, 'distance'):
+                        result['config']['distance'] = vectors_config.distance.value if hasattr(vectors_config.distance, 'value') else str(vectors_config.distance)
+            except Exception:
+                pass
+            return result
         except Exception as e:
             logger.error(f"Info error: {e}")
             return {'status': 'error', 'error': str(e)}
@@ -428,7 +457,7 @@ class QdrantVectorStore:
             ))
         return results
 
-    def close(self):
+    def close(self) -> None:
         """Close connection."""
         if self._client:
             self._client.close()

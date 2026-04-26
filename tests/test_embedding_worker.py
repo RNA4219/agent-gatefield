@@ -14,6 +14,7 @@ from src.encoder.embedding_worker import (
     DEFAULT_DIMENSIONS,
     FALLBACK_MODEL,
 )
+from src.encoder.runtime import LlamaCppAdapter, RuntimeConfig, RuntimeStatus, RuntimeType
 
 
 class TestEmbeddingJob:
@@ -117,6 +118,22 @@ class TestEmbeddingWorkerInit:
         assert worker.api_key == "sk-test"
         assert worker.api_base == "https://api.example.com/v1"
 
+    def test_llama_cpp_env_config_is_forwarded(self):
+        """LLAMA_CPP_* env vars are passed to the runtime adapter."""
+        with patch.dict(
+            "os.environ",
+            {
+                "LLAMA_CPP_HOST": "127.0.0.1",
+                "LLAMA_CPP_PORT": "18080",
+                "EMBEDDING_TIMEOUT": "12.5",
+            },
+        ):
+            worker = EmbeddingWorker(provider="local", runtime="llama.cpp")
+
+        assert worker._runtime_adapter.config.host == "127.0.0.1"
+        assert worker._runtime_adapter.config.port == 18080
+        assert worker._runtime_adapter.config.timeout == 12.5
+
 
 class TestEmbeddingWorkerMock:
     """Tests for mock provider."""
@@ -171,6 +188,48 @@ class TestEmbeddingWorkerFallback:
         assert result["status"] == "fallback"
         assert result["reason"] == "No model available"
         assert result["model"] == FALLBACK_MODEL
+
+
+class TestLlamaCppAdapter:
+    """Tests for llama.cpp HTTP embedding response handling."""
+
+    def test_extract_vectors_from_llama_server_list_response(self):
+        """llama-server /embedding returns top-level list items."""
+        data = [
+            {"index": 0, "embedding": [[0.1, 0.2, 0.3]]},
+        ]
+
+        assert LlamaCppAdapter._extract_vectors(data) == [[0.1, 0.2, 0.3]]
+
+    def test_extract_vectors_from_dict_response(self):
+        """Legacy dict response remains supported."""
+        data = {"embedding": [0.1, 0.2, 0.3]}
+
+        assert LlamaCppAdapter._extract_vectors(data) == [[0.1, 0.2, 0.3]]
+
+    @patch("src.encoder.runtime.LlamaCppAdapter.is_available", return_value=True)
+    @patch("requests.post")
+    def test_embed_accepts_llama_server_list_response(self, mock_post, _mock_available):
+        """Adapter converts actual llama-server response shape to one vector."""
+        response = Mock()
+        response.status_code = 200
+        response.json.return_value = [
+            {"index": 0, "embedding": [[0.1, 0.2, 0.3]]},
+        ]
+        mock_post.return_value = response
+        adapter = LlamaCppAdapter(
+            RuntimeConfig(
+                runtime_type=RuntimeType.LLAMA_CPP,
+                model="BAAI/bge-m3",
+                dimensions=3,
+            )
+        )
+
+        result = adapter.embed(["hello"])
+
+        assert result.status == RuntimeStatus.SUCCESS
+        assert result.vectors == [[0.1, 0.2, 0.3]]
+        assert result.dimensions == 3
 
 
 class TestEmbeddingWorkerProcessing:

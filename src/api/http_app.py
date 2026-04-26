@@ -164,10 +164,13 @@ class GatefieldService:
         return item.review_id
 
 
+SERVICE_KEY = web.AppKey("service", GatefieldService)
+
+
 def create_app(config: dict[str, Any] | None = None) -> web.Application:
     service = GatefieldService(config)
     app = web.Application()
-    app["service"] = service
+    app[SERVICE_KEY] = service
 
     async def health(_: web.Request) -> web.Response:
         return web.json_response({"status": "ok", "service": "agent-gatefield"})

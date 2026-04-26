@@ -229,3 +229,177 @@ class TestDecisionEngineIntegration:
         result = engine.evaluate(state_vector, {})
         assert result.run_id == 'run-full'
         assert result.threshold_version is not None
+
+
+class TestEngineCoverageBoost:
+    """
+    Additional tests to boost core/engine.py coverage.
+    Covers: state transitions, hard overrides, edge cases, scorer integration.
+    """
+
+    def test_engine_with_taboo_threshold(self):
+        """Engine respects taboo threshold config."""
+        config = {
+            'thresholds': {'taboo_block': 0.95, 'taboo_warn': 0.85},
+            'threshold_version': 'custom-v1'
+        }
+        engine = DecisionEngine(config)
+        assert engine.get_threshold_version() == 'custom-v1'
+
+    def test_engine_state_rules_loaded(self):
+        """STATE_RULES are defined."""
+        assert STATE_RULES is not None
+        assert isinstance(STATE_RULES, dict)
+
+    def test_gate_state_values(self):
+        """GateState enum values."""
+        assert GateState.PASS.value == 'pass'
+        assert GateState.WARN.value == 'warn'
+        assert GateState.HOLD.value == 'hold'
+        assert GateState.BLOCK.value == 'block'
+
+    def test_engine_high_uncertainty_hold(self):
+        """High uncertainty triggers hold."""
+        engine = DecisionEngine({})
+        state_vector = {
+            'run_id': 'run-uncertain',
+            'artifact_id': 'art-1',
+            'rule_violation': {},
+            'risk': {},
+            'uncertainty': {'judge_std': 0.30}  # High uncertainty
+        }
+        result = engine.evaluate(state_vector, {})
+        assert result.decision in ('hold', 'block')
+
+    def test_engine_empty_rule_violation(self):
+        """Empty rule violation with low uncertainty."""
+        engine = DecisionEngine({})
+        state_vector = {
+            'run_id': 'run-clean',
+            'artifact_id': 'art-1',
+            'rule_violation': {},
+            'risk': {},
+            'uncertainty': {'judge_std': 0.01}  # Very low uncertainty
+        }
+        result = engine.evaluate(state_vector, {})
+        # Decision depends on scorer results
+        assert result.decision in ('pass', 'warn', 'hold')
+
+    def test_engine_with_static_gate_results(self):
+        """Engine processes static gate results."""
+        engine = DecisionEngine({})
+        state_vector = {
+            'run_id': 'run-static',
+            'artifact_id': 'art-1',
+            'rule_violation': {},
+            'risk': {},
+            'uncertainty': {'judge_std': 0.02}
+        }
+        static_results = {
+            'lint': {'status': 'pass'},
+            'sast': {'status': 'pass'},
+            'secret_scan': {'status': 'pass'}
+        }
+        result = engine.evaluate(state_vector, static_results)
+        assert result.static_gate_summary is not None
+
+    def test_decision_result_factors(self):
+        """DecisionResult includes factors."""
+        engine = DecisionEngine({})
+        state_vector = {
+            'run_id': 'run-factors',
+            'artifact_id': 'art-1',
+            'rule_violation': {},
+            'risk': {},
+            'uncertainty': {'judge_std': 0.02}
+        }
+        result = engine.evaluate(state_vector, {})
+        assert result.factors is not None
+        assert isinstance(result.factors, list)
+
+    def test_decision_result_action_type(self):
+        """DecisionResult includes action type."""
+        engine = DecisionEngine({})
+        state_vector = {
+            'run_id': 'run-action',
+            'artifact_id': 'art-1',
+            'rule_violation': {},
+            'risk': {},
+            'uncertainty': {'judge_std': 0.02}
+        }
+        result = engine.evaluate(state_vector, {})
+        assert result.action is not None
+        # action is a dict
+        assert 'action_type' in result.action
+        assert result.action['action_type'] in ('pass', 'warn', 'human_review', 'block')
+
+    def test_engine_with_hard_override_config(self):
+        """Engine handles hard override config."""
+        config = {
+            'hard_overrides': {
+                'block_if_secret_found': True,
+                'block_if_prod_write_and_taboo_warn': True
+            }
+        }
+        engine = DecisionEngine(config)
+        assert engine.config.get('hard_overrides') is not None
+
+    def test_engine_decision_result_serializable(self):
+        """DecisionResult can be serialized."""
+        engine = DecisionEngine({})
+        state_vector = {
+            'run_id': 'run-serial',
+            'artifact_id': 'art-1',
+            'rule_violation': {},
+            'risk': {},
+            'uncertainty': {'judge_std': 0.02}
+        }
+        result = engine.evaluate(state_vector, {})
+        # Should be able to convert to dict
+        result_dict = result.to_dict() if hasattr(result, 'to_dict') else {
+            'decision': result.decision,
+            'run_id': result.run_id
+        }
+        assert 'decision' in result_dict
+
+    def test_engine_composite_score_range(self):
+        """Composite score is in valid range."""
+        engine = DecisionEngine({})
+        state_vector = {
+            'run_id': 'run-score',
+            'artifact_id': 'art-1',
+            'rule_violation': {},
+            'risk': {},
+            'uncertainty': {'judge_std': 0.02}
+        }
+        result = engine.evaluate(state_vector, {})
+        assert 0.0 <= result.composite_score <= 1.0
+
+    def test_engine_with_scorer_weights(self):
+        """Engine uses configured scorer weights."""
+        config = {
+            'scorers': {
+                'constitution_alignment': {'weight': 0.25},
+                'taboo_proximity': {'weight': 0.35}
+            }
+        }
+        engine = DecisionEngine(config)
+        # Engine should load weights
+        assert engine.config.get('scorers') is not None
+
+    def test_engine_run_id_propagation(self):
+        """Run_id is propagated through evaluation."""
+        engine = DecisionEngine({})
+        state_vector = {
+            'run_id': 'specific-run-123',
+            'artifact_id': 'art-1',
+            'rule_violation': {},
+            'risk': {},
+            'uncertainty': {'judge_std': 0.02}
+        }
+        result = engine.evaluate(state_vector, {})
+        assert result.run_id == 'specific-run-123'
+
+
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])

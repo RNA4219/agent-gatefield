@@ -115,8 +115,11 @@ class EmbeddingWorker:
 
         config_dict = {
             "runtime": self.runtime,
+            "host": os.environ.get("LLAMA_CPP_HOST", "localhost"),
+            "port": int(os.environ.get("LLAMA_CPP_PORT", "8080")),
             "model": self.model,
             "dimensions": self.dims,
+            "timeout": float(os.environ.get("EMBEDDING_TIMEOUT", "30.0")),
         }
         self._runtime_adapter = create_adapter_from_config(config_dict)
 
@@ -229,7 +232,7 @@ class EmbeddingWorker:
         }
 
     def _process_local(self, texts: List[str]) -> Dict[str, Any]:
-        """Process texts with local runtime adapter."""
+        """Process texts with local runtime adapter with fallback chain."""
         if self._runtime_adapter:
             result = self._runtime_adapter.embed(texts)
             if result.status == RuntimeStatus.SUCCESS:
@@ -251,8 +254,56 @@ class EmbeddingWorker:
                     "provider": result.provider,
                     "runtime": result.runtime,
                 }
+
+            # llama.cpp unavailable - try sentence_transformers as fallback
+            if self.runtime in ("llama.cpp", "llama_cpp"):
+                logger.info("llama.cpp unavailable, trying sentence_transformers...")
+                st_result = self._try_sentence_transformers(texts)
+                if st_result["status"] == "success":
+                    return st_result
+                logger.warning(f"sentence_transformers also failed: {st_result.get('reason')}")
+
             logger.warning(f"Runtime adapter unavailable: {result.reason}")
-        return self._fallback_result(texts, "Runtime adapter not initialized")
+        else:
+            # No adapter - try sentence_transformers directly
+            st_result = self._try_sentence_transformers(texts)
+            if st_result["status"] == "success":
+                return st_result
+
+        return self._fallback_result(texts, "All runtime adapters failed")
+
+    def _try_sentence_transformers(self, texts: List[str]) -> Dict[str, Any]:
+        """Try sentence_transformers adapter as fallback."""
+        from .runtime import SentenceTransformersAdapter, RuntimeConfig, RuntimeType
+
+        config = RuntimeConfig(
+            runtime_type=RuntimeType.SENTENCE_TRANSFORMERS,
+            model=self.model,
+            dimensions=self.dims,
+        )
+        adapter = SentenceTransformersAdapter(config)
+
+        if adapter.is_available():
+            result = adapter.embed(texts)
+            if result.status == RuntimeStatus.SUCCESS:
+                return {
+                    "vectors": result.vectors,
+                    "model": result.model,
+                    "dims": result.dimensions,
+                    "status": "success",
+                    "provider": result.provider,
+                    "runtime": result.runtime,
+                }
+            return {
+                "vectors": [],
+                "model": result.model,
+                "dims": result.dimensions,
+                "status": "fallback",
+                "reason": result.reason,
+                "provider": result.provider,
+                "runtime": result.runtime,
+            }
+        return self._fallback_result(texts, "sentence_transformers unavailable")
 
     def _process_api(self, texts: List[str]) -> Dict[str, Any]:
         """Process texts with external API."""

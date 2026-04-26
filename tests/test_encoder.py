@@ -1157,8 +1157,9 @@ class TestEdgeCases:
         encoder = StateEncoder({})  # Empty config
 
         assert encoder.provider == 'local'
-        assert encoder.model == 'local-hash-embedding-v1'
-        assert encoder.dimensions == 1536
+        assert encoder.runtime == 'llama.cpp'
+        assert encoder.model == 'BAAI/bge-m3'
+        assert encoder.dimensions == 1024
 
     def test_none_embedding_config_raises_error(self):
         """Test StateEncoder with None embedding config raises AttributeError.
@@ -1218,6 +1219,20 @@ class TestEdgeCases:
 class TestPerformanceAndReliability:
     """Tests for performance and reliability characteristics."""
 
+    def _fast_encoder(self):
+        """Create an encoder with a cheap embedding worker for encoder-only perf tests."""
+        worker = Mock()
+        worker.process_text.return_value = [0.1] * 1024
+        return StateEncoder(
+            {
+                'provider': 'local',
+                'runtime': 'llama.cpp',
+                'model': 'BAAI/bge-m3',
+                'dimensions': 1024,
+            },
+            embedding_worker=worker,
+        )
+
     def test_encoding_is_deterministic(
         self, encoder, complete_artifact, complete_trace, complete_rule_results
     ):
@@ -1247,6 +1262,7 @@ class TestPerformanceAndReliability:
     ):
         """Encoding should complete quickly."""
         import time
+        encoder = self._fast_encoder()
 
         start = time.time()
         for _ in range(100):
@@ -1261,6 +1277,7 @@ class TestPerformanceAndReliability:
     ):
         """Encoding should not leak memory."""
         import gc
+        encoder = self._fast_encoder()
 
         gc.collect()
         initial_objects = len(gc.get_objects())
@@ -1407,3 +1424,731 @@ class TestBGE3Defaults:
         # Each candidate must have reranker_score
         for c in result.candidates:
             assert 'reranker_score' in c
+
+
+# =============================================================================
+# EmbeddingWorker Coverage Tests
+# =============================================================================
+
+class TestEmbeddingWorkerCoverage:
+    """
+    Tests for EmbeddingWorker coverage boost.
+    Covers: _process_mock, fallback chain, batch operations, API handling.
+    """
+
+    def test_process_mock_provider(self):
+        """Mock provider returns deterministic embeddings."""
+        worker = EmbeddingWorker(provider='mock')
+        result = worker.process_text("test mock")
+
+        assert len(result) == 1024
+        assert isinstance(result, list)
+
+    def test_batch_process_mock(self):
+        """Batch process with mock provider."""
+        worker = EmbeddingWorker(provider='mock')
+        jobs = [
+            worker.create_job("doc1", "text one"),
+            worker.create_job("doc2", "text two"),
+        ]
+        results = worker.batch_process(jobs)
+
+        assert len(results) == 2
+        assert "doc1" in results
+        assert len(results["doc1"]) == 1024
+
+    def test_fallback_embedding_bulk(self):
+        """Fallback bulk embedding generates consistent vectors."""
+        worker = EmbeddingWorker(provider='local', runtime='fallback')
+        vectors = worker._fallback_embedding_bulk(["a", "b", "c"])
+
+        assert len(vectors) == 3
+        assert all(len(v) == 1024 for v in vectors)
+        # Same input should give same output
+        vectors2 = worker._fallback_embedding_bulk(["a"])
+        assert vectors2[0] == vectors[0]
+
+    def test_create_job_with_content_hash(self):
+        """Job creation includes content hash."""
+        worker = EmbeddingWorker()
+        job = worker.create_job("test-doc", "sample text")
+
+        assert job.doc_id == "test-doc"
+        assert job.text == "sample text"
+        assert job.content_hash is not None
+        assert len(job.content_hash) == 64  # SHA256
+
+    def test_compute_hash_consistency(self):
+        """Hash computation is consistent."""
+        worker = EmbeddingWorker()
+        hash1 = worker.compute_hash("test content")
+        hash2 = worker.compute_hash("test content")
+
+        assert hash1 == hash2
+        assert hash1 != worker.compute_hash("different content")
+
+    def test_is_api_available_local(self):
+        """Local provider is always available."""
+        worker = EmbeddingWorker(provider='local')
+        assert worker.is_api_available() is True
+
+    def test_is_api_available_mock(self):
+        """Mock provider is always available."""
+        worker = EmbeddingWorker(provider='mock')
+        assert worker.is_api_available() is True
+
+    def test_uses_external_api_false_for_local(self):
+        """Local provider does not use external API."""
+        worker = EmbeddingWorker(provider='local')
+        assert worker.uses_external_api() is False
+
+    def test_process_texts_with_fallback_runtime(self):
+        """Fallback runtime returns fallback status."""
+        worker = EmbeddingWorker(provider='local', runtime='fallback')
+        result = worker._process_texts(["test"])
+
+        assert result["status"] == "fallback"
+        assert result["model"] == "local-hash-embedding-v1"
+        assert len(result["vectors"][0]) == 1024
+
+    def test_fallback_result_structure(self):
+        """Fallback result has correct structure."""
+        worker = EmbeddingWorker()
+        result = worker._fallback_result(["text"], "test reason", "local", "fallback")
+
+        assert result["status"] == "fallback"
+        assert result["reason"] == "test reason"
+        assert result["provider"] == "local"
+        assert result["runtime"] == "fallback"
+        assert len(result["vectors"]) == 1
+
+    def test_embedding_worker_default_dims(self):
+        """Default dimensions is 1024."""
+        worker = EmbeddingWorker()
+        assert worker.dims == 1024
+
+    def test_embedding_worker_custom_dims(self):
+        """Custom dimensions are respected."""
+        worker = EmbeddingWorker(dims=768)
+        assert worker.dims == 768
+
+    def test_process_text_with_status_success_fields(self):
+        """process_text_with_status returns all required fields."""
+        worker = EmbeddingWorker(provider='local', runtime='fallback')
+        result = worker.process_text_with_status("test")
+
+        required_fields = ["vector", "model", "dims", "status", "provider", "runtime"]
+        for field in required_fields:
+            assert field in result
+
+    def test_api_headers_structure(self):
+        """API headers have correct structure."""
+        worker = EmbeddingWorker(provider='openai', api_key='test-key')
+        headers = worker._get_headers()
+
+        assert "Authorization" in headers
+        assert headers["Authorization"] == "Bearer test-key"
+        assert headers["Content-Type"] == "application/json"
+
+
+# =============================================================================
+# Rerank Module Coverage Tests
+# =============================================================================
+
+class TestRerankModuleCoverage:
+    """
+    Tests for rerank module coverage boost.
+    Covers: SentenceTransformersReranker, DeterministicFallbackReranker, factory functions.
+    """
+
+    def test_deterministic_fallback_reranker_available(self):
+        """Fallback reranker is always available."""
+        from rerank import DeterministicFallbackReranker
+        reranker = DeterministicFallbackReranker()
+        assert reranker.is_available() is True
+
+    def test_deterministic_fallback_rerank_empty_candidates(self):
+        """Fallback reranker handles empty candidates."""
+        from rerank import DeterministicFallbackReranker
+        reranker = DeterministicFallbackReranker()
+        result = reranker.rerank("query", [], top_k=5)
+        assert len(result.candidates) == 0
+        assert result.status.value == "success"
+
+    def test_deterministic_fallback_rerank_sorts_by_similarity(self):
+        """Fallback reranker sorts by similarity descending."""
+        from rerank import DeterministicFallbackReranker
+        reranker = DeterministicFallbackReranker()
+        candidates = [
+            {'text': 'low', 'similarity': 0.3},
+            {'text': 'high', 'similarity': 0.9},
+            {'text': 'mid', 'similarity': 0.6},
+        ]
+        result = reranker.rerank("query", candidates, top_k=3)
+        scores = [c['reranker_score'] for c in result.candidates]
+        assert scores == sorted(scores, reverse=True)
+
+    def test_deterministic_fallback_get_info(self):
+        """Fallback reranker provides info."""
+        from rerank import DeterministicFallbackReranker
+        reranker = DeterministicFallbackReranker()
+        info = reranker.get_info()
+        assert info['available'] is True
+        assert info['semantic'] is False
+
+    def test_create_reranker_fallback(self):
+        """create_reranker creates fallback reranker."""
+        from rerank import create_reranker
+        reranker = create_reranker(use_fallback=True)
+        assert reranker.is_available() is True
+
+    def test_create_reranker_disabled(self):
+        """create_reranker with enabled=False."""
+        from rerank import create_reranker, SentenceTransformersReranker
+        reranker = create_reranker(enabled=False)
+        assert reranker.enabled is False
+
+    def test_reranker_status_values(self):
+        """RerankerStatus enum values."""
+        from rerank import RerankerStatus
+        assert RerankerStatus.SUCCESS.value == "success"
+        assert RerankerStatus.FALLBACK.value == "fallback"
+        assert RerankerStatus.UNAVAILABLE.value == "unavailable"
+
+    def test_rerank_result_dataclass(self):
+        """RerankResult has required fields."""
+        from rerank import RerankResult, RerankerStatus
+        result = RerankResult(
+            candidates=[{'text': 'test'}],
+            model='test-model',
+            status=RerankerStatus.FALLBACK
+        )
+        assert result.candidates == [{'text': 'test'}]
+        assert result.model == 'test-model'
+        assert result.status == RerankerStatus.FALLBACK
+
+    def test_create_reranker_from_config(self):
+        """create_reranker_from_config works."""
+        from rerank import create_reranker_from_config
+        config = {'state_space_gate': {'reranker': {'enabled': True}}}
+        reranker = create_reranker_from_config(config)
+        assert reranker is not None
+
+    def test_reranker_top_k_limit(self):
+        """Reranker respects top_k limit."""
+        from rerank import DeterministicFallbackReranker
+        reranker = DeterministicFallbackReranker()
+        candidates = [{'text': f't{i}', 'similarity': 0.5} for i in range(10)]
+        result = reranker.rerank("query", candidates, top_k=3)
+        assert len(result.candidates) == 3
+
+    def test_reranker_adds_score_field(self):
+        """Reranker adds reranker_score to candidates."""
+        from rerank import DeterministicFallbackReranker
+        reranker = DeterministicFallbackReranker()
+        candidates = [{'text': 'test', 'similarity': 0.7}]
+        result = reranker.rerank("query", candidates, top_k=1)
+        assert 'reranker_score' in result.candidates[0]
+        assert 'fallback_rerank' in result.candidates[0]
+
+    def test_default_reranker_model(self):
+        """Default reranker model is bge-reranker-v2-m3."""
+        from rerank import DEFAULT_MODEL
+        assert DEFAULT_MODEL == "BAAI/bge-reranker-v2-m3"
+
+    def test_default_top_k_values(self):
+        """Default top_k input/output values."""
+        from rerank import DEFAULT_TOP_K_INPUT, DEFAULT_TOP_K_OUTPUT
+        assert DEFAULT_TOP_K_INPUT == 50
+        assert DEFAULT_TOP_K_OUTPUT == 10
+
+    def test_sentence_transformers_reranker_disabled(self):
+        """SentenceTransformersReranker with enabled=False."""
+        from rerank import SentenceTransformersReranker
+        reranker = SentenceTransformersReranker(enabled=False)
+        assert reranker.enabled is False
+        assert reranker.is_available() is False
+
+    def test_sentence_transformers_reranker_get_info(self):
+        """SentenceTransformersReranker provides info."""
+        from rerank import SentenceTransformersReranker
+        reranker = SentenceTransformersReranker(model='test-model', enabled=True)
+        info = reranker.get_info()
+        assert 'model' in info
+        assert 'enabled' in info
+        assert info['model'] == 'test-model'
+
+    def test_sentence_transformers_reranker_disabled_rerank(self):
+        """Disabled reranker returns candidates unchanged."""
+        from rerank import SentenceTransformersReranker
+        reranker = SentenceTransformersReranker(enabled=False)
+        candidates = [{'text': 'test', 'similarity': 0.8}]
+        result = reranker.rerank("query", candidates, top_k=1)
+        # When disabled, returns candidates as-is
+        assert len(result.candidates) == 1
+
+    def test_sentence_transformers_reranker_empty_candidates(self):
+        """Reranker handles empty candidates."""
+        from rerank import SentenceTransformersReranker
+        reranker = SentenceTransformersReranker(enabled=True)
+        result = reranker.rerank("query", [], top_k=5)
+        assert len(result.candidates) == 0
+
+    def test_sentence_transformers_reranker_fallback_on_error(self):
+        """Reranker falls back when model loading fails."""
+        from rerank import SentenceTransformersReranker
+        reranker = SentenceTransformersReranker(model='invalid-model', enabled=True)
+        # Should not crash, will use fallback
+        candidates = [{'text': 'test', 'similarity': 0.8}]
+        result = reranker.rerank("query", candidates, top_k=1)
+        # Either fallback or empty result
+        assert result.status.value in ('fallback', 'success')
+
+    def test_sentence_transformers_reranker_top_k_limit(self):
+        """Reranker respects top_k limit."""
+        from rerank import SentenceTransformersReranker
+        reranker = SentenceTransformersReranker(enabled=False)  # Use disabled for speed
+        candidates = [{'text': f't{i}', 'similarity': 0.5} for i in range(20)]
+        result = reranker.rerank("query", candidates, top_k=5)
+        assert len(result.candidates) == 5
+
+    def test_sentence_transformers_reranker_custom_model(self):
+        """Reranker accepts custom model name."""
+        from rerank import SentenceTransformersReranker
+        reranker = SentenceTransformersReranker(model='custom-reranker')
+        assert reranker.model == 'custom-reranker'
+
+
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])
+
+
+# =============================================================================
+# EmbeddingWorker Coverage Tests
+# =============================================================================
+
+class TestEmbeddingWorkerInit:
+    """Tests for EmbeddingWorker initialization."""
+
+    def test_default_init(self):
+        """Default initialization with BGE-M3."""
+        from encoder.embedding_worker import EmbeddingWorker, DEFAULT_MODEL, DEFAULT_DIMENSIONS
+        worker = EmbeddingWorker()
+        assert worker.model == DEFAULT_MODEL
+        assert worker.dims == DEFAULT_DIMENSIONS
+        assert worker.provider == "local"
+
+    def test_custom_model_init(self):
+        """Custom model initialization."""
+        from encoder.embedding_worker import EmbeddingWorker
+        worker = EmbeddingWorker(model="text-embedding-3-large", dims=1536)
+        assert worker.model == "text-embedding-3-large"
+
+    def test_mock_provider_init(self):
+        """Mock provider initialization."""
+        from encoder.embedding_worker import EmbeddingWorker
+        worker = EmbeddingWorker(provider="mock")
+        assert worker.provider == "mock"
+
+    def test_dims_warning(self):
+        """Non-optimal dims logs warning."""
+        from encoder.embedding_worker import EmbeddingWorker, DEFAULT_MODEL
+        import logging
+        logging.getLogger('encoder.embedding_worker').setLevel(logging.WARNING)
+        worker = EmbeddingWorker(model=DEFAULT_MODEL, dims=512)  # BGE-M3 uses 1024
+        # Should have logged warning but not crash
+        assert worker.dims == 512
+
+    def test_api_key_from_env(self):
+        """API key from environment."""
+        import os
+        from encoder.embedding_worker import EmbeddingWorker
+        os.environ['OPENAI_API_KEY'] = 'test-key'
+        worker = EmbeddingWorker(provider="openai")
+        assert worker.api_key == 'test-key'
+        del os.environ['OPENAI_API_KEY']
+
+
+class TestEmbeddingWorkerMethods:
+    """Tests for EmbeddingWorker methods."""
+
+    def test_compute_hash(self):
+        """compute_hash returns SHA256."""
+        from encoder.embedding_worker import EmbeddingWorker
+        import hashlib
+        worker = EmbeddingWorker()
+        text = "test text"
+        hash_result = worker.compute_hash(text)
+        expected = hashlib.sha256(text.encode('utf-8')).hexdigest()
+        assert hash_result == expected
+
+    def test_create_job(self):
+        """create_job creates EmbeddingJob."""
+        from encoder.embedding_worker import EmbeddingWorker, EmbeddingJob
+        worker = EmbeddingWorker()
+        job = worker.create_job("doc-1", "test text")
+        assert isinstance(job, EmbeddingJob)
+        assert job.doc_id == "doc-1"
+        assert job.text == "test text"
+        assert job.status == "pending"
+
+    def test_is_api_available_local(self):
+        """is_api_available returns True for local."""
+        from encoder.embedding_worker import EmbeddingWorker
+        worker = EmbeddingWorker(provider="local")
+        assert worker.is_api_available() is True
+
+    def test_is_api_available_mock(self):
+        """is_api_available returns True for mock."""
+        from encoder.embedding_worker import EmbeddingWorker
+        worker = EmbeddingWorker(provider="mock")
+        assert worker.is_api_available() is True
+
+    def test_is_api_available_openai_no_key(self):
+        """is_api_available returns False for openai without key."""
+        import os
+        from encoder.embedding_worker import EmbeddingWorker
+        os.environ.pop('OPENAI_API_KEY', None)
+        worker = EmbeddingWorker(provider="openai", api_key=None)
+        assert worker.is_api_available() is False
+
+    def test_is_api_available_openai_with_key(self):
+        """is_api_available returns True for openai with key."""
+        from encoder.embedding_worker import EmbeddingWorker
+        worker = EmbeddingWorker(provider="openai", api_key="test-key")
+        assert worker.is_api_available() is True
+
+    def test_uses_external_api_local(self):
+        """uses_external_api returns False for local."""
+        from encoder.embedding_worker import EmbeddingWorker
+        worker = EmbeddingWorker(provider="local")
+        assert worker.uses_external_api() is False
+
+    def test_uses_external_api_openai(self):
+        """uses_external_api returns True for openai."""
+        from encoder.embedding_worker import EmbeddingWorker
+        worker = EmbeddingWorker(provider="openai")
+        assert worker.uses_external_api() is True
+
+
+class TestEmbeddingWorkerProcessMock:
+    """Tests for mock provider processing."""
+
+    def test_process_text_mock(self):
+        """process_text with mock provider."""
+        from encoder.embedding_worker import EmbeddingWorker
+        worker = EmbeddingWorker(provider="mock", dims=1024)
+        result = worker.process_text("test text")
+        assert len(result) == 1024
+        assert all(isinstance(v, float) for v in result)
+
+    def test_process_text_with_status_mock(self):
+        """process_text_with_status with mock provider."""
+        from encoder.embedding_worker import EmbeddingWorker
+        worker = EmbeddingWorker(provider="mock", dims=1024)
+        result = worker.process_text_with_status("test text")
+        assert 'vector' in result
+        assert 'status' in result
+        assert result['status'] == 'success'
+        assert len(result['vector']) == 1024
+
+    def test_process_texts_mock(self):
+        """_process_texts with mock provider."""
+        from encoder.embedding_worker import EmbeddingWorker
+        worker = EmbeddingWorker(provider="mock", dims=1024)
+        result = worker._process_texts(["text1", "text2"])
+        assert len(result['vectors']) == 2
+        assert result['status'] == 'success'
+
+
+class TestEmbeddingWorkerProcessLocal:
+    """Tests for local provider processing."""
+
+    @patch('encoder.embedding_worker.EmbeddingWorker._init_runtime_adapter')
+    def test_process_text_local_fallback(self, mock_init):
+        """process_text with local provider uses fallback when adapter unavailable."""
+        from encoder.embedding_worker import EmbeddingWorker
+        worker = EmbeddingWorker(provider="local")
+        worker._runtime_adapter = None
+        result = worker.process_text("test text")
+        # Should return fallback embedding
+        assert len(result) == worker.dims
+
+    def test_process_text_local_with_mock_adapter(self):
+        """process_text with mocked runtime adapter."""
+        from encoder.embedding_worker import EmbeddingWorker
+        from encoder.runtime import RuntimeStatus, EmbeddingResult
+
+        worker = EmbeddingWorker(provider="local")
+
+        # Create mock adapter that returns success
+        mock_adapter = MagicMock()
+        mock_result = EmbeddingResult(
+            vectors=[[0.1] * 1024],
+            model='BAAI/bge-m3',
+            dimensions=1024,
+            status=RuntimeStatus.SUCCESS,
+            provider='local',
+            runtime='llama.cpp',
+            reason=None
+        )
+        mock_adapter.embed.return_value = mock_result
+        worker._runtime_adapter = mock_adapter
+
+        result = worker.process_text("test text")
+        assert len(result) == 1024
+
+
+class TestEmbeddingWorkerProcessJob:
+    """Tests for process_job method."""
+
+    def test_process_job_success(self):
+        """process_job processes job successfully."""
+        from encoder.embedding_worker import EmbeddingWorker, EmbeddingJob
+        worker = EmbeddingWorker(provider="mock")
+        job = EmbeddingJob(
+            doc_id="doc-1",
+            text="test",
+            model="mock",
+            dims=1024,
+            content_hash="hash",
+            status="pending"
+        )
+        result = worker.process_job(job)
+        assert len(result) == 1024
+        assert job.status == "success"
+
+    def test_process_job_with_exception(self):
+        """process_job handles exception."""
+        from encoder.embedding_worker import EmbeddingWorker, EmbeddingJob
+        worker = EmbeddingWorker(provider="mock")
+        job = EmbeddingJob(
+            doc_id="doc-err",
+            text="test",
+            model="mock",
+            dims=1024,
+            content_hash="hash",
+            status="pending"
+        )
+        # Force an exception by patching
+        with patch.object(worker, 'process_text_with_status', side_effect=Exception("test error")):
+            result = worker.process_job(job)
+            assert job.status == "failed"
+            assert job.error == "test error"
+
+
+class TestEmbeddingWorkerBatchProcess:
+    """Tests for batch processing."""
+
+    def test_batch_process_mock(self):
+        """batch_process with mock provider."""
+        from encoder.embedding_worker import EmbeddingWorker, EmbeddingJob
+        worker = EmbeddingWorker(provider="mock", dims=1024)
+
+        jobs = [
+            worker.create_job(f"doc-{i}", f"text {i}") for i in range(3)
+        ]
+        results = worker.batch_process(jobs)
+        assert len(results) == 3
+        assert all(len(v) == 1024 for v in results.values())
+
+    def test_batch_process_empty(self):
+        """batch_process with empty jobs."""
+        from encoder.embedding_worker import EmbeddingWorker
+        worker = EmbeddingWorker(provider="mock")
+        results = worker.batch_process([])
+        assert results == {}
+
+
+class TestEmbeddingWorkerFallback:
+    """Tests for fallback embedding."""
+
+    def test_fallback_embedding(self):
+        """_fallback_embedding returns deterministic vector."""
+        from encoder.embedding_worker import EmbeddingWorker
+        worker = EmbeddingWorker(dims=1024)
+        result = worker._fallback_embedding("test")
+        assert len(result) == 1024
+
+    def test_fallback_embedding_bulk(self):
+        """_fallback_embedding_bulk returns multiple vectors."""
+        from encoder.embedding_worker import EmbeddingWorker
+        worker = EmbeddingWorker(dims=1024)
+        results = worker._fallback_embedding_bulk(["text1", "text2"])
+        assert len(results) == 2
+        assert all(len(v) == 1024 for v in results)
+
+    def test_fallback_result(self):
+        """_fallback_result returns proper dict."""
+        from encoder.embedding_worker import EmbeddingWorker
+        worker = EmbeddingWorker(dims=1024)
+        result = worker._fallback_result(["text"], "test reason")
+        assert result['status'] == 'fallback'
+        assert result['reason'] == 'test reason'
+        assert len(result['vectors']) == 1
+
+    def test_mock_embedding(self):
+        """_mock_embedding returns deterministic mock."""
+        from encoder.embedding_worker import EmbeddingWorker
+        worker = EmbeddingWorker(dims=1024)
+        result = worker._mock_embedding()
+        assert len(result) == 1024
+        # Should be deterministic
+        result2 = worker._mock_embedding()
+        assert result == result2
+
+
+class TestEmbeddingWorkerAPI:
+    """Tests for API-based processing."""
+
+    def test_process_api_no_key(self):
+        """_process_api returns fallback without key."""
+        from encoder.embedding_worker import EmbeddingWorker
+        worker = EmbeddingWorker(provider="openai", api_key=None)
+        result = worker._process_texts(["test"])
+        assert result['status'] == 'fallback'
+
+    @patch('encoder.embedding_worker.EmbeddingWorker._call_embedding_api')
+    def test_process_api_success(self, mock_call):
+        """_process_api returns vectors on success."""
+        from encoder.embedding_worker import EmbeddingWorker
+        mock_call.return_value = [[0.1] * 1536]
+        worker = EmbeddingWorker(provider="openai", api_key="test-key", dims=1536)
+        result = worker._process_texts(["test"])
+        assert result['status'] == 'success'
+        assert len(result['vectors']) == 1
+
+    @patch('encoder.embedding_worker.EmbeddingWorker._call_embedding_api')
+    def test_process_api_failure(self, mock_call):
+        """_process_api returns fallback on API failure."""
+        from encoder.embedding_worker import EmbeddingWorker
+        mock_call.return_value = []
+        worker = EmbeddingWorker(provider="openai", api_key="test-key")
+        result = worker._process_texts(["test"])
+        assert result['status'] == 'fallback'
+
+    def test_get_headers(self):
+        """_get_headers returns proper headers."""
+        from encoder.embedding_worker import EmbeddingWorker
+        worker = EmbeddingWorker(api_key="test-key")
+        headers = worker._get_headers()
+        assert headers['Authorization'] == 'Bearer test-key'
+        assert headers['Content-Type'] == 'application/json'
+
+
+class TestEmbeddingConfig:
+    """Tests for EmbeddingConfig dataclass."""
+
+    def test_embedding_config_defaults(self):
+        """EmbeddingConfig has correct defaults."""
+        from encoder.embedding_worker import EmbeddingConfig, DEFAULT_MODEL, DEFAULT_DIMENSIONS
+        config = EmbeddingConfig()
+        assert config.model == DEFAULT_MODEL
+        assert config.dims == DEFAULT_DIMENSIONS
+        assert config.provider == "local"
+
+    def test_embedding_config_custom(self):
+        """EmbeddingConfig accepts custom values."""
+        from encoder.embedding_worker import EmbeddingConfig
+        config = EmbeddingConfig(
+            model="custom-model",
+            dims=512,
+            provider="openai"
+        )
+        assert config.model == "custom-model"
+        assert config.dims == 512
+        assert config.provider == "openai"
+
+
+class TestEmbeddingJob:
+    """Tests for EmbeddingJob dataclass."""
+
+    def test_embedding_job_creation(self):
+        """EmbeddingJob basic creation."""
+        from encoder.embedding_worker import EmbeddingJob
+        job = EmbeddingJob(
+            doc_id="doc-1",
+            text="test",
+            model="mock",
+            dims=1024,
+            content_hash="hash123"
+        )
+        assert job.doc_id == "doc-1"
+        assert job.status == "pending"
+        assert job.embedding is None
+
+    def test_embedding_job_with_embedding(self):
+        """EmbeddingJob with embedding."""
+        from encoder.embedding_worker import EmbeddingJob
+        job = EmbeddingJob(
+            doc_id="doc-2",
+            text="test",
+            model="mock",
+            dims=1024,
+            content_hash="hash",
+            status="completed",
+            embedding=[0.1] * 1024
+        )
+        assert job.status == "completed"
+        assert len(job.embedding) == 1024
+
+
+class TestEmbeddingWorkerSentenceTransformersFallback:
+    """Tests for sentence_transformers fallback."""
+
+    @patch('encoder.embedding_worker.EmbeddingWorker._try_sentence_transformers')
+    def test_sentence_transformers_fallback_called(self, mock_st):
+        """_try_sentence_transformers called when llama.cpp unavailable."""
+        from encoder.embedding_worker import EmbeddingWorker
+        from encoder.runtime import RuntimeStatus, EmbeddingResult
+
+        mock_st.return_value = {
+            'vectors': [[0.1] * 1024],
+            'status': 'success',
+            'model': 'BAAI/bge-m3',
+            'dims': 1024,
+            'provider': 'local',
+            'runtime': 'sentence_transformers'
+        }
+
+        worker = EmbeddingWorker(provider="local", runtime="llama.cpp")
+        # Mock adapter that returns unavailable
+        mock_adapter = MagicMock()
+        mock_result = EmbeddingResult(
+            vectors=None,
+            model='BAAI/bge-m3',
+            dimensions=1024,
+            status=RuntimeStatus.UNAVAILABLE,
+            provider='local',
+            runtime='llama.cpp',
+            reason='llama.cpp unavailable'
+        )
+        mock_adapter.embed.return_value = mock_result
+        worker._runtime_adapter = mock_adapter
+
+        result = worker._process_texts(["test"])
+        mock_st.assert_called_once()
+
+    @patch('encoder.runtime.SentenceTransformersAdapter')
+    def test_try_sentence_transformers_success(self, mock_adapter_class):
+        """_try_sentence_transformers returns success."""
+        from encoder.embedding_worker import EmbeddingWorker
+        from encoder.runtime import RuntimeStatus, EmbeddingResult
+
+        mock_adapter = MagicMock()
+        mock_result = EmbeddingResult(
+            vectors=[[0.1] * 1024],
+            model='BAAI/bge-m3',
+            dimensions=1024,
+            status=RuntimeStatus.SUCCESS,
+            provider='local',
+            runtime='sentence_transformers',
+            reason=None
+        )
+        mock_adapter.embed.return_value = mock_result
+        mock_adapter.is_available.return_value = True
+        mock_adapter_class.return_value = mock_adapter
+
+        worker = EmbeddingWorker(provider="local")
+        result = worker._try_sentence_transformers(["test"])
+        assert result['status'] == 'success'

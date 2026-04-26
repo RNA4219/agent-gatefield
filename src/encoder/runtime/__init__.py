@@ -186,6 +186,47 @@ class LlamaCppAdapter:
         self._availability_cache[cache_key] = self._available
         return self._available
 
+    @staticmethod
+    def _extract_vectors(data: Any) -> List[List[float]]:
+        """Normalize llama.cpp embedding response variants."""
+        embeddings: List[Any]
+
+        if isinstance(data, dict):
+            if isinstance(data.get("data"), list):
+                items = sorted(data["data"], key=lambda x: x.get("index", 0) if isinstance(x, dict) else 0)
+                embeddings = [
+                    item.get("embedding")
+                    for item in items
+                    if isinstance(item, dict) and item.get("embedding") is not None
+                ]
+            else:
+                embeddings = [data.get("embedding")]
+        elif isinstance(data, list):
+            if all(isinstance(item, dict) for item in data):
+                items = sorted(data, key=lambda x: x.get("index", 0))
+                embeddings = [
+                    item.get("embedding")
+                    for item in items
+                    if item.get("embedding") is not None
+                ]
+            else:
+                embeddings = data
+        else:
+            return []
+
+        vectors: List[List[float]] = []
+        for embedding in embeddings:
+            if not isinstance(embedding, list) or not embedding:
+                continue
+            if isinstance(embedding[0], list):
+                if len(embedding) == 1:
+                    vectors.append(embedding[0])
+                else:
+                    vectors.extend(embedding)
+            else:
+                vectors.append(embedding)
+        return vectors
+
     def embed(self, texts: List[str]) -> EmbeddingResult:
         """Generate embeddings via llama.cpp HTTP API."""
         if not self.is_available():
@@ -226,15 +267,17 @@ class LlamaCppAdapter:
                     runtime="llama.cpp"
                 )
 
-            data = response.json()
-            embedding = data.get("embedding", [])
-
-            # Handle batch response
-            if isinstance(embedding, list) and len(embedding) > 0:
-                if isinstance(embedding[0], list):
-                    vectors = embedding
-                else:
-                    vectors = [embedding]
+            vectors = self._extract_vectors(response.json())
+            if not vectors:
+                return EmbeddingResult(
+                    vectors=[],
+                    model=self.config.model,
+                    dimensions=self.config.dimensions,
+                    status=RuntimeStatus.ERROR,
+                    reason="No embeddings in llama.cpp response",
+                    provider="local",
+                    runtime="llama.cpp"
+                )
 
             return EmbeddingResult(
                 vectors=vectors,

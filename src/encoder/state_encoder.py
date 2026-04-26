@@ -12,8 +12,17 @@ from typing import Dict, List, Optional
 from .utils import generate_mock_embedding
 
 try:
-    from src.encoder.embedding_worker import EmbeddingWorker, create_embedding_worker_from_config
+    from src.encoder.embedding_worker import (
+        DEFAULT_DIMENSIONS,
+        DEFAULT_MODEL,
+        DEFAULT_RUNTIME,
+        EmbeddingWorker,
+        create_embedding_worker_from_config,
+    )
 except ImportError:
+    DEFAULT_MODEL = "BAAI/bge-m3"
+    DEFAULT_DIMENSIONS = 1024
+    DEFAULT_RUNTIME = "llama.cpp"
     EmbeddingWorker = None
     create_embedding_worker_from_config = None
 
@@ -44,8 +53,9 @@ class StateEncoder:
         embedding_worker: EmbeddingWorker = None
     ):
         self.provider = embedding_config.get('provider') or os.environ.get('EMBEDDING_PROVIDER', 'local')
-        self.model = embedding_config.get('model') or os.environ.get('EMBEDDING_MODEL', 'local-hash-embedding-v1')
-        self.dimensions = int(embedding_config.get('dimensions') or os.environ.get('EMBEDDING_DIMENSIONS', 1536))
+        self.runtime = embedding_config.get('runtime') or os.environ.get('EMBEDDING_RUNTIME', DEFAULT_RUNTIME)
+        self.model = embedding_config.get('model') or os.environ.get('EMBEDDING_MODEL', DEFAULT_MODEL)
+        self.dimensions = int(embedding_config.get('dimensions') or os.environ.get('EMBEDDING_DIMENSIONS', DEFAULT_DIMENSIONS))
 
         # Initialize embedding worker
         if embedding_worker:
@@ -53,6 +63,7 @@ class StateEncoder:
         elif EmbeddingWorker:
             self.embedding_worker = EmbeddingWorker(
                 provider=self.provider,
+                runtime=self.runtime,
                 model=self.model,
                 dims=self.dimensions
             )

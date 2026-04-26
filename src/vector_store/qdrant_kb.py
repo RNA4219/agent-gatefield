@@ -12,7 +12,12 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 from .qdrant_store import QdrantVectorStore, SearchResult, DEFAULT_DIMS
-from ..encoder.local_embedder import LocalEmbedder, Reranker, DEFAULT_MODEL
+
+# Use absolute imports for encoder
+try:
+    from encoder.local_embedder import LocalEmbedder, Reranker, DEFAULT_MODEL
+except ImportError:
+    from src.encoder.local_embedder import LocalEmbedder, Reranker, DEFAULT_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +229,7 @@ class QdrantJudgmentKB:
             'top_k': {'input': self.top_k_input, 'output': self.top_k_output},
         }
 
-    def close(self):
+    def close(self) -> None:
         """Close all connections."""
         self.vector_store.close()
 

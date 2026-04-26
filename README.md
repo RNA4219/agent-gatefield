@@ -130,6 +130,39 @@ python -m pytest tests/ -v  # 647 tests
 python -m cli.gate_cli dry-run --run-id test-001
 ```
 
+### Local Retrieval Stack Setup (BGE-M3 / bge-reranker-v2-m3)
+
+Default embedding uses BGE-M3 (1024d) via sentence-transformers. **First-time setup requires network access to download models.**
+
+```bash
+# Install optional dependencies for local embedding
+pip install -e ".[local-runtime,reranker,qdrant]"
+
+# First run will download BGE-M3 (~2.2GB) and bge-reranker-v2-m3 (~1.2GB)
+# Models are cached locally by sentence-transformers (usually in ~/.cache/torch/sentence_transformers/)
+
+# Verify model download
+python -c "from sentence_transformers import SentenceTransformer; m = SentenceTransformer('BAAI/bge-m3'); print('Model loaded:', m.get_sentence_embedding_dimension())"
+
+# Offline fallback: If models not available, hash-based fallback is used automatically
+# This is NOT semantically meaningful, only for testing/fallback
+python -c "from src.encoder.embedding_worker import EmbeddingWorker; w = EmbeddingWorker(); print(w.process_text('test')[:3])"
+```
+
+**Offline environments**: Tests run without models using hash-based fallback. No network required after initial model download.
+
+| Component | Default Model | Size | Cache Location |
+|-----------|--------------|------|----------------|
+| Embedding | BAAI/bge-m3 | ~2.2GB | `~/.cache/torch/sentence_transformers/` |
+| Reranker | BAAI/bge-reranker-v2-m3 | ~1.2GB | `~/.cache/torch/sentence_transformers/` |
+| Vector Store | Qdrant | - | In-memory or Docker |
+
+**Alternative runtimes** (optional):
+- llama.cpp: HTTP server for embeddings (no model download in Python)
+- Ollama: Dev optional profile
+- LM Studio: Desktop optional profile
+- vLLM: GPU scale optional profile
+
 ## CLI Commands
 
 ```bash
