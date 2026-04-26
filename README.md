@@ -1,79 +1,193 @@
 # Agent Gatefield
 
-Agent Gatefield は、AI エージェントの成果物をそのまま通す前に、危ない兆候や品質のズレを検知して `pass` / `hold` / `block` に振り分けるゲートです。
+Agent Gatefield は、AI エージェントが作った成果物をそのまま通さず、`pass` / `hold` / `block` に振り分ける安全ゲートです。
 
-一言でいうと、AI エージェント用の「品質保証と安全確認の関所」です。
+もっと普通の言葉でいうと、**AI が作った変更を「通してよい」「人間が見るべき」「止めるべき」に分ける仕組み**です。
 
-## まず何をするものか
+## 3分でわかる説明
 
-AI エージェントは、コード変更、設計文書、ツール実行計画、PR 提案などを自動で作ります。Agent Gatefield はそれらを受け取り、次の観点で判定します。
+AI エージェントは、コード、設定変更、PR 提案、コマンド実行計画などを自動で作れます。便利ですが、次のような出力もありえます。
 
-| 観点 | 見ているもの | 例 |
+| AI が出すかもしれないもの | 何が怖いか | Gatefield の反応 |
 |---|---|---|
-| 静的ゲート | 決定論的に分かる危険 | lint 失敗、型エラー、secret 混入、危険コマンド |
-| 状態空間ゲート | 文脈上の危険やズレ | 設計憲法との不一致、禁忌例への近さ、過去の却下例との類似 |
-| 人間レビュー | 自動で決めきれないもの | 高権限操作、不確実性が高い変更、判断根拠が薄い変更 |
+| 本番 DB を書き換えるコマンド | 影響が大きい | `hold` にして人間確認へ回す |
+| secret らしき文字列を含むコード差分 | 漏洩につながる | `block` する |
+| テストは通るが設計方針から外れた変更 | 後から保守不能になる | 類似する却下例や設計憲法から危険度を出す |
+| 過去に失敗した変更に似た提案 | 同じ事故を繰り返す | `hold` または `block` に寄せる |
+| 判断材料が少ない高権限操作 | 自動承認が危ない | `hold` にして reviewer に渡す |
 
-判定結果は主に 3 種類です。
+Gatefield は「テストが通ったか」だけを見ません。
+
+**過去の判断、チームの設計方針、危険な操作、曖昧さ、人間が見るべき条件**をまとめて見ます。
+
+そのため、挙動は少し不思議に見えます。単純な if 文ではなく、「この変更は過去の危ない変更に近いか」「チームの憲法から外れていないか」「自信を持って通せるか」をまとめて判断するからです。
+
+## 何を入力して、何が返るのか
+
+入力は、AI エージェントの実行結果です。
+
+| 入力 | 内容 |
+|---|---|
+| artifact | AI が作った成果物。コード差分、文書、PR 提案、実行計画など |
+| trace | AI がどう考え、どのツールを使い、何を試したか |
+| static gate result | lint、型チェック、テスト、SAST、secret scan などの結果 |
+| context | 対象 repo、環境、本番/開発、権限、操作種別など |
+
+出力は `DecisionPacket` です。
+
+| 出力 | 内容 |
+|---|---|
+| `decision` | `pass` / `hold` / `block` |
+| `composite_score` | 総合的な危険度やズレのスコア |
+| `factors` | どの要素が判断に効いたか |
+| `action` | 通す、人間レビューへ回す、止めるなど |
+| `threshold_version` | どの閾値セットで判断したか |
+| `audit metadata` | 後から再現・監査するための情報 |
+
+`hold` や `block` はエラーではありません。危険や不確実性を検知して、ちゃんと止まっている状態です。
+
+## 判断のイメージ
+
+たとえば、AI が次のような変更を作ったとします。
+
+```text
+本番環境のユーザーテーブルに対して一括更新を行う migration を追加した。
+テストは通っている。
+ただし rollback 手順がなく、過去に却下された migration 方針に似ている。
+```
+
+普通の CI なら「テストが通ったので OK」に見えるかもしれません。
+
+Gatefield はもう少し広く見ます。
+
+| 観点 | 判断 |
+|---|---|
+| テスト | 通っている |
+| 本番影響 | 大きい |
+| rollback | 不足 |
+| 過去の却下例 | 似ている |
+| 自動で通すべきか | 危ない |
+
+この場合、`pass` ではなく `hold` になりやすいです。
+
+```json
+{
+  "decision": "hold",
+  "action": {
+    "action_type": "human_review"
+  },
+  "factors": [
+    {
+      "name": "reject_similarity",
+      "value": 0.82
+    },
+    {
+      "name": "uncertainty",
+      "value": 0.31
+    }
+  ]
+}
+```
+
+ここで Gatefield がしているのは、「テストは通ったけれど、この変更は人間が見るべき」と判断することです。
+
+## なぜ効くのか
+
+Gatefield の強みは、AI 出力を単発で見ないことです。
+
+| 仕組み | 役割 |
+|---|---|
+| Static gates | 明確にダメなものを落とす。secret、SAST、危険コマンドなど |
+| Judgment KB | チームの憲法、禁忌例、採用例、却下例を保存する |
+| Embedding | 今回の成果物が、過去の例や方針にどれだけ近いかを見る |
+| Scorers | 複数の観点で危険度やズレを採点する |
+| Hard overrides | secret 検出など、スコアに関係なく止める |
+| Human review | 自動で決めきれないものを人間へ渡す |
+| Replay | 後から同じ条件で判断を再現する |
+
+つまり Gatefield は、AI エージェントに対する「記憶つきの品質ゲート」です。
+
+過去に危なかったもの、チームが嫌う設計、明確に禁止した操作を、次の判断に使います。
+
+## 全体の流れ
+
+```text
+AI エージェントの実行
+        |
+        v
+成果物、実行履歴、静的チェック結果を集める
+        |
+        v
+StateEncoder が判断しやすい形に変換する
+        |
+        v
+Embedding で過去の判断や設計方針との近さを見る
+        |
+        v
+Scorers が複数の観点で採点する
+        |
+        v
+DecisionEngine が pass / hold / block を決める
+        |
+        v
+必要なら human review へ送る
+```
+
+この流れを実装しているので、単純なルールベースよりも「なぜそこで止まれるの？」という挙動になります。そこがこのツールの面白いところで、同時に初見で理解しづらいところです。
+
+## 判定の種類
 
 | 判定 | 意味 | 次にすること |
 |---|---|---|
 | `pass` | 通してよい | 後続処理へ進める |
-| `hold` | 人間確認が必要 | review queue に積む |
+| `hold` | 自動では決めきれない | 人間レビューへ回す |
 | `block` | 止めるべき | 修正または運用判断が必要 |
 
-`hold` や `block` は失敗ではありません。危険や不確実性を検知して止められている状態です。
-
-## 全体像
-
-```
-AI エージェントの実行
-        |
-        v
-Trace / Artifact / Static gate result
-        |
-        v
-StateEncoder
-  - 実行内容を状態ベクトルに変換
-  - BGE-M3 で意味ベクトル化
-        |
-        v
-DecisionEngine
-  - 静的ゲート
-  - 8 種類の scorer
-  - hard override
-        |
-        v
-DecisionPacket
-  - pass / hold / block
-  - score
-  - 理由
-  - audit 用 metadata
-```
-
-この README では、まず動かすために必要なことだけを説明します。詳細仕様は `docs/` 配下に分けています。
+`hold` は弱い失敗ではありません。AI を安全に使うには、`hold` をきちんと出せることが重要です。
 
 ## 現在の状態
 
-MVP は完成扱いです。
+この repository は PoC ではなく、MVP として扱える状態です。
 
 | 項目 | 状態 |
 |---|---|
 | Decision Engine | 実装済み |
 | State Encoder | 実装済み |
+| Static gates | 実装済み |
+| Judgment KB | 実装済み |
 | BGE-M3 local embedding | 実装済み |
 | llama.cpp runtime adapter | 実装済み |
 | Qdrant vector store | 実装済み |
 | pgvector vector store | 実装済み |
 | bge-reranker-v2-m3 reranker | 実装済み |
-| Static gates | 実装済み |
 | Human review queue / SLA | 実装済み |
-| HTTP adapter | 実装済み |
+| HTTP API | 実装済み |
 | CLI | 実装済み |
 | Tests | `1435 passed, 11 skipped` を確認済み |
 | Coverage | 80% 目標で妥協 |
 
-検収時点の主な確認結果:
+PoC ではなく MVP と呼べる理由は、アイデアの実証だけでなく、CLI、HTTP API、fallback、検収、README、RUNBOOK まで揃っているためです。
+
+ただし、長期の本番無人運用に入れるには、実データでの reviewer 運用、SLA ダッシュボード、長期 replay、Qdrant/pgvector の運用証跡をさらに積む必要があります。
+
+## 最短で動かす
+
+```powershell
+cd C:\Users\ryo-n\Codex_dev\agent-gatefield
+
+# 設定ファイルが正しいか確認
+uv run --offline --no-sync python -m cli.gate_cli config validate -f config\gate-config.yaml
+
+# サンプル run を評価する
+uv run --offline --no-sync python -m cli.gate_cli dry-run --run-id local-retrieval-check --json
+
+# テストを回す
+uv run --offline --no-sync python -m pytest tests -q
+```
+
+`dry-run` は `hold` や `block` の場合に非 0 終了になることがあります。JSON が出ていて `decision` が読めるなら、CLI が壊れているわけではありません。
+
+## 検収済みの内容
 
 ```text
 uv run --offline --no-sync python -m pytest tests -q
@@ -92,39 +206,7 @@ BGE-M3 / llama.cpp の実機経路も確認済みです。
 BAAI/bge-m3 1024 1024 success llama.cpp
 ```
 
-## 最短で動かす
-
-このプロジェクトは Python パッケージです。普段の検証は `uv` を使う前提にしています。
-
-```powershell
-cd C:\Users\ryo-n\Codex_dev\agent-gatefield
-
-# 設定ファイルが正しいか確認
-uv run --offline --no-sync python -m cli.gate_cli config validate -f config\gate-config.yaml
-
-# サンプル run を評価する
-uv run --offline --no-sync python -m cli.gate_cli dry-run --run-id local-retrieval-check --json
-
-# テストを回す
-uv run --offline --no-sync python -m pytest tests -q
-```
-
-`dry-run` は判定が `hold` や `block` の場合、非 0 終了になることがあります。JSON が出ていて `decision` が読めるなら、CLI が壊れているわけではありません。
-
-例:
-
-```json
-{
-  "decision": "hold",
-  "action": {
-    "action_type": "human_review"
-  }
-}
-```
-
-これは「人間確認に回す」という正常な判定です。
-
-## 初回モデル準備
+## Local Retrieval Stack
 
 既定の semantic embedding は `BAAI/bge-m3` です。BGE-M3 の dense embedding は 1024 次元です。
 
@@ -132,7 +214,7 @@ uv run --offline --no-sync python -m pytest tests -q
 
 - 初回だけモデルダウンロードが必要です。
 - ネットワークなし、モデルなしの状態では BGE-M3 実モデル推論はできません。
-- ただし、自動テストは fallback によりモデルなしでも通るようにしています。
+- 自動テストは fallback によりモデルなしでも通るようにしています。
 - fallback は意味検索としては使わず、テストや degraded mode 用です。
 
 sentence-transformers で直接確認する場合:
@@ -170,7 +252,7 @@ $env:LLAMA_CPP_PORT="18080"
 
 主な設定ファイルは [config/gate-config.yaml](config/gate-config.yaml) です。
 
-特に見るべき箇所は `state_space_gate` です。
+まず見るべき箇所は `state_space_gate` です。
 
 ```yaml
 state_space_gate:
@@ -201,7 +283,7 @@ state_space_gate:
 
 今の既定は `enforce_warn_hold` です。
 
-## CLI の使い方
+## CLI
 
 よく使うコマンドだけを載せます。
 
@@ -236,7 +318,7 @@ uv run python scripts\offline_eval.py --dataset all --dataset-dir datasets
 
 ## HTTP API
 
-`agent-state-gate` など外部制御面から接続するための HTTP surface があります。
+外部制御面から接続するための HTTP API があります。
 
 起動:
 
