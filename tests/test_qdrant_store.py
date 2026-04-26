@@ -248,13 +248,47 @@ class TestQdrantVectorStoreErrorHandling:
         """Search error returns empty list."""
         store = QdrantVectorStore(in_memory=True)
         mock_client = Mock()
-        mock_client.search.side_effect = Exception("Search failed")
+        mock_client.query_batch_points.side_effect = Exception("Search failed")
 
         store._client = mock_client
         store._initialized = True
 
         results = store.search_similar([0.1] * 1024, "taboo")
         assert results == []
+
+    @pytest.mark.skip(reason="Requires qdrant_client installed")
+    def test_search_respects_min_score(self):
+        """Search filters results below min_score."""
+        store = QdrantVectorStore(in_memory=True)
+        store.insert_document(
+            "taboo",
+            "test",
+            [0.1] * 1024,
+            doc_id="00000000-0000-0000-0000-000000000001",
+        )
+
+        results = store.search_similar([0.1] * 1024, "taboo", min_score=1.1)
+        assert results == []
+
+    @pytest.mark.skip(reason="Requires qdrant_client installed")
+    def test_insert_payload_contract(self):
+        """Inserted Qdrant payload includes RUNBOOK contract aliases."""
+        store = QdrantVectorStore(in_memory=True)
+        doc_id = "00000000-0000-0000-0000-000000000001"
+        store.insert_document("taboo", "test", [0.1] * 1024, source_type="manual", doc_id=doc_id)
+
+        points, _ = store._client.scroll(
+            collection_name=store.collection_name,
+            limit=1,
+            with_payload=True,
+        )
+        payload = points[0].payload
+        assert payload["doc_id"] == doc_id
+        assert payload["axis"] == "taboo"
+        assert payload["axis_type"] == "taboo"
+        assert payload["source"] == "manual"
+        assert payload["source_type"] == "manual"
+        assert len(payload["content_hash"]) == 64
 
     def test_insert_error_returns_mock(self):
         """Insert error returns mock doc_id."""

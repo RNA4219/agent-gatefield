@@ -868,3 +868,9 @@ class TestVectorStoreCoveragePaths:
         vs = VectorStore("postgresql://localhost/gatefield")
         vs.insert_state_vector({'run_id': 'run-no-semantic', 'artifact_id': 'artifact-1', 'semantic': {}})
         mock_cursor.execute.assert_called_once()
+
+
+# =============================================================================
+# QdrantVectorStore Coverage Tests
+# =============================================================================
+
