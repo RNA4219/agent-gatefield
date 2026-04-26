@@ -9,6 +9,9 @@ from src.adapters.dataclasses import RunEvent, ArtifactSnapshot, StaticGateResul
 from src.adapters.base import HarnessAdapter
 from src.adapters.generic_adapter import GenericHarnessAdapter
 from src.adapters.registry import HarnessRegistry
+from src.adapters.claude_adapter import ClaudeCodeAdapter
+from src.adapters.openai_adapter import OpenAIAgentsSDKAdapter
+from src.adapters.langgraph_adapter import LangGraphAdapter
 
 
 class TestDataclasses:
@@ -346,3 +349,215 @@ class TestGenericHarnessAdapterIntegration:
         for cmd, expected in commands:
             result = adapter.check_tool_policy({"command": cmd})
             assert result == expected
+
+
+class TestClaudeCodeAdapter:
+    """Tests for ClaudeCodeAdapter."""
+
+    def test_initialization(self):
+        """Adapter initializes correctly."""
+        adapter = ClaudeCodeAdapter()
+        assert adapter._hook_results == []
+        assert adapter._artifacts == {}
+        assert len(adapter._deny_patterns) > 0
+
+    def test_subscribe_events(self):
+        """Subscribe events."""
+        adapter = ClaudeCodeAdapter()
+        adapter.subscribe_events()
+
+    def test_pause_run(self):
+        """Pause run creates checkpoint."""
+        adapter = ClaudeCodeAdapter()
+        checkpoint = adapter.pause_run("run-1")
+        assert checkpoint.startswith("claude://session/")
+
+    def test_resume_run(self):
+        """Resume run clears checkpoint."""
+        adapter = ClaudeCodeAdapter()
+        checkpoint = adapter.pause_run("run-1")
+        adapter.resume_run("run-1", checkpoint)
+        assert "run-1" not in adapter._session_checkpoints
+
+    def test_check_tool_policy_deny(self):
+        """Tool policy denies dangerous patterns."""
+        adapter = ClaudeCodeAdapter()
+        assert adapter.check_tool_policy({"tool_name": "bash", "tool_input": {"command": "rm -rf"}}) == "deny"
+        assert adapter.check_tool_policy({"tool_name": "bash", "tool_input": {"command": "sudo"}}) == "deny"
+
+    def test_check_tool_policy_hold(self):
+        """Tool policy holds production commands."""
+        adapter = ClaudeCodeAdapter()
+        assert adapter.check_tool_policy({"tool_name": "bash", "tool_input": {"command": "deploy production"}}) == "hold"
+
+    def test_check_tool_policy_allow(self):
+        """Tool policy allows safe commands."""
+        adapter = ClaudeCodeAdapter()
+        assert adapter.check_tool_policy({"tool_name": "read", "tool_input": {"file_path": "/tmp/test"}}) == "allow"
+
+    def test_get_artifact_snapshot(self):
+        """Get artifact snapshot."""
+        adapter = ClaudeCodeAdapter()
+        snapshot = adapter.get_artifact_snapshot("run-1")
+        assert snapshot.run_id == "run-1"
+
+    def test_get_artifact_snapshot_registered(self):
+        """Get registered artifact."""
+        adapter = ClaudeCodeAdapter()
+        artifact = ArtifactSnapshot(
+            run_id="run-1",
+            artifact_id="custom",
+            hash="sha256:custom",
+            diff=None,
+            source_step="custom",
+            commit=None,
+            branch=None
+        )
+        adapter.register_artifact("run-1", artifact)
+        snapshot = adapter.get_artifact_snapshot("run-1")
+        assert snapshot.artifact_id == "custom"
+
+    def test_ingest_static_gate_result(self):
+        """Ingest gate result."""
+        adapter = ClaudeCodeAdapter()
+        adapter.ingest_static_gate_result({'run_id': 'run-1', 'gate_type': 'lint', 'passed': True})
+        assert len(adapter._hook_results) == 1
+
+    def test_get_trace_context(self):
+        """Get trace context."""
+        adapter = ClaudeCodeAdapter()
+        ctx = adapter.get_trace_context("run-1")
+        assert ctx['run_id'] == 'run-1'
+        assert 'trace_id' in ctx
+
+
+class TestOpenAIAgentsSDKAdapter:
+    """Tests for OpenAIAgentsSDKAdapter."""
+
+    def test_initialization(self):
+        """Adapter initializes correctly."""
+        adapter = OpenAIAgentsSDKAdapter()
+        assert adapter._traces == {}
+        assert adapter._checkpoints == {}
+
+    def test_subscribe_events(self):
+        """Subscribe events."""
+        adapter = OpenAIAgentsSDKAdapter()
+        adapter.subscribe_events()
+
+    def test_pause_run(self):
+        """Pause run creates checkpoint."""
+        adapter = OpenAIAgentsSDKAdapter()
+        checkpoint = adapter.pause_run("run-1")
+        assert checkpoint.startswith("otel://checkpoint/")
+
+    def test_resume_run(self):
+        """Resume run."""
+        adapter = OpenAIAgentsSDKAdapter()
+        checkpoint = adapter.pause_run("run-1")
+        adapter.resume_run("run-1", checkpoint)
+
+    def test_check_tool_policy_hold(self):
+        """Tool policy holds dangerous tools."""
+        adapter = OpenAIAgentsSDKAdapter()
+        assert adapter.check_tool_policy({"name": "execute_code"}) == "hold"
+        assert adapter.check_tool_policy({"name": "run_shell"}) == "hold"
+        assert adapter.check_tool_policy({"name": "file_write"}) == "hold"
+
+    def test_check_tool_policy_allow(self):
+        """Tool policy allows safe tools."""
+        adapter = OpenAIAgentsSDKAdapter()
+        assert adapter.check_tool_policy({"name": "read_file"}) == "allow"
+
+    def test_get_artifact_snapshot(self):
+        """Get artifact snapshot."""
+        adapter = OpenAIAgentsSDKAdapter()
+        snapshot = adapter.get_artifact_snapshot("run-1")
+        assert snapshot.run_id == "run-1"
+
+    def test_get_artifact_snapshot_with_trace(self):
+        """Get artifact snapshot with trace data."""
+        adapter = OpenAIAgentsSDKAdapter()
+        adapter.register_trace("run-1", {"diff": "test diff", "last_step": "step_2"})
+        snapshot = adapter.get_artifact_snapshot("run-1")
+        assert snapshot.diff == "test diff"
+
+    def test_ingest_static_gate_result(self):
+        """Ingest gate result."""
+        adapter = OpenAIAgentsSDKAdapter()
+        adapter.register_trace("run-1", {})
+        adapter.ingest_static_gate_result({'run_id': 'run-1', 'gate_type': 'lint', 'passed': True})
+        assert 'static_gates' in adapter._traces['run-1']
+
+    def test_get_trace_context(self):
+        """Get trace context."""
+        adapter = OpenAIAgentsSDKAdapter()
+        ctx = adapter.get_trace_context("run-1")
+        assert ctx['run_id'] == 'run-1'
+
+    def test_get_trace_context_with_trace(self):
+        """Get trace context with registered trace."""
+        adapter = OpenAIAgentsSDKAdapter()
+        adapter.register_trace("run-1", {"trace_id": "custom-trace", "span_id": "custom-span"})
+        ctx = adapter.get_trace_context("run-1")
+        assert ctx['trace_id'] == "custom-trace"
+
+
+class TestLangGraphAdapter:
+    """Tests for LangGraphAdapter."""
+
+    def test_initialization(self):
+        """Adapter initializes correctly."""
+        adapter = LangGraphAdapter()
+        assert adapter._graph_states == {}
+        assert adapter._checkpoints == {}
+
+    def test_subscribe_events(self):
+        """Subscribe events."""
+        adapter = LangGraphAdapter()
+        adapter.subscribe_events()
+
+    def test_pause_run(self):
+        """Pause run creates checkpoint."""
+        adapter = LangGraphAdapter()
+        checkpoint = adapter.pause_run("run-1")
+        assert checkpoint.startswith("langgraph://checkpoint/")
+
+    def test_resume_run(self):
+        """Resume run."""
+        adapter = LangGraphAdapter()
+        checkpoint = adapter.pause_run("run-1")
+        adapter.resume_run("run-1", checkpoint)
+
+    def test_check_tool_policy(self):
+        """Tool policy always allows."""
+        adapter = LangGraphAdapter()
+        assert adapter.check_tool_policy({"tool": "any"}) == "allow"
+
+    def test_get_artifact_snapshot(self):
+        """Get artifact snapshot."""
+        adapter = LangGraphAdapter()
+        snapshot = adapter.get_artifact_snapshot("run-1")
+        assert snapshot.run_id == "run-1"
+
+    def test_get_artifact_snapshot_with_state(self):
+        """Get artifact snapshot with graph state."""
+        adapter = LangGraphAdapter()
+        adapter._graph_states["run-1"] = {"diff": "test diff", "current_node": "node_1"}
+        snapshot = adapter.get_artifact_snapshot("run-1")
+        assert snapshot.diff == "test diff"
+        assert snapshot.source_step == "node_1"
+
+    def test_ingest_static_gate_result(self):
+        """Ingest gate result."""
+        adapter = LangGraphAdapter()
+        adapter._graph_states["run-1"] = {}
+        adapter.ingest_static_gate_result({'run_id': 'run-1', 'gate_type': 'lint', 'passed': True})
+        assert 'static_gates' in adapter._graph_states['run-1']
+
+    def test_get_trace_context(self):
+        """Get trace context."""
+        adapter = LangGraphAdapter()
+        ctx = adapter.get_trace_context("run-1")
+        assert ctx['run_id'] == 'run-1'
+        assert 'thread_id' in ctx
