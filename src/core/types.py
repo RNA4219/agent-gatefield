@@ -6,7 +6,7 @@ DATA_TYPES_SPEC compliant type definitions.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from enum import Enum
 
 
@@ -49,6 +49,7 @@ class DecisionResult:
     # Optional fields with defaults - come after required fields
     schema_version: str = "1.0.0"
     artifact_id: str = ""
+    artifact_ref: Optional[Dict[str, Any]] = None
     policy_version: str = ""
     factors: List[ScoreFactor] = field(default_factory=list)
     exemplar_refs: List[ExemplarRef] = field(default_factory=list)
@@ -62,6 +63,7 @@ class DecisionResult:
     scorer_results: List = field(default_factory=list)  # ScorerResult list
     persistent_factors: List[str] = field(default_factory=list)
     checkpoint_ref: Optional[str] = None
+    diff_hash: str = ""
     created_at: Optional[str | datetime] = None  # ISO format timestamp
     # Audit fields (STATE_TRANSITION_SPEC 11.1)
     decision_id: Optional[str] = None
@@ -81,6 +83,8 @@ class DecisionResult:
             'decision_id': self.decision_id,
             'run_id': self.run_id,
             'artifact_id': self.artifact_id,
+            'artifact_ref': self.artifact_ref,
+            'diff_hash': self.diff_hash,
             'decision': self.decision,
             'composite_score': self.composite_score,
             'factors': [f.__dict__ if hasattr(f, '__dict__') else f for f in self.factors],

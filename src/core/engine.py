@@ -277,8 +277,15 @@ class DecisionEngine:
             "checkpoint_ref": None  # Set later if hold
         }
 
-        # Step 9: Extract artifact_id and state_vector_ref from state_vector
+        # Step 9: Extract artifact identity and state_vector_ref from state_vector
         artifact_id = state_vector.get('artifact_id', '')
+        artifact_ref = state_vector.get('artifact_ref')
+        diff_hash = state_vector.get('diff_hash', '')
+        if artifact_ref and not isinstance(artifact_ref, dict):
+            artifact_ref = {
+                'uri': artifact_ref,
+                'diff_hash': diff_hash,
+            }
         run_id = state_vector.get('run_id', '')
         trace_id = state_vector.get('trace_id')
         state_vector_ref = f"state://{state_vector.get('run_id', '')}" if state_vector.get('run_id') else ''
@@ -288,6 +295,8 @@ class DecisionEngine:
             decision=decision,
             composite_score=composite_score,
             artifact_id=artifact_id,
+            artifact_ref=artifact_ref,
+            diff_hash=diff_hash,
             policy_version=policy_version,
             factors=factors,
             exemplar_refs=exemplar_refs,
@@ -673,6 +682,7 @@ class DecisionEngine:
         result = DecisionResult(
             decision='block',
             composite_score=1.0,
+            artifact_ref={'uri': affected_artifacts[0], 'diff_hash': ''} if affected_artifacts else None,
             factors=[late_fail_factor],
             exemplar_refs=[],
             action={'action_type': 'artifact_correction'},

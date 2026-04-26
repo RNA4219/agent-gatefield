@@ -50,6 +50,16 @@ def _engine_config(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _semantic_dimensions(config: dict[str, Any]) -> int:
+    embedding_config = config.get("state_space_gate", {}).get("semantic_embedding", {})
+    return int(embedding_config.get("dimensions", 1024))
+
+
+def _semantic_model(config: dict[str, Any]) -> str:
+    embedding_config = config.get("state_space_gate", {}).get("semantic_embedding", {})
+    return embedding_config.get("model", "BAAI/bge-m3")
+
+
 def _trace_id(value: str | None) -> str:
     if value:
         return value
@@ -99,12 +109,18 @@ class GatefieldService:
             run_id = payload.get("run_id") or trace.get("run_id") or str(uuid.uuid4())
             artifact_id = payload.get("artifact_id") or str(uuid.uuid4())
             rule_results = payload.get("rule_results") or {}
+            semantic_dims = _semantic_dimensions(self.config)
             state_vector = {
                 "schema_version": "1.0.0",
                 "run_id": run_id,
                 "artifact_id": artifact_id,
                 "trace_id": _trace_id(trace.get("trace_id")),
-                "semantic": payload.get("semantic") or {"vector": [0.5] * 1536},
+                "semantic": payload.get("semantic") or {
+                    "provider": "local",
+                    "model": _semantic_model(self.config),
+                    "dims": semantic_dims,
+                    "vector": [0.5] * semantic_dims,
+                },
                 "rule_violation": _rule_results_to_violations(rule_results),
                 "test_evidence": payload.get("test_evidence") or {"unit_pass_rate": 1.0},
                 "risk": payload.get("risk") or {},

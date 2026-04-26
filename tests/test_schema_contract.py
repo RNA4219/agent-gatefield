@@ -25,7 +25,7 @@ TRACE_EVENT_SCHEMA = {
 STATE_VECTOR_SCHEMA = {
     "run_id": "uuid",
     "artifact_id": "uuid",
-    "semantic": {"provider": "local", "model": "local-hash-embedding-v1", "dims": 1536, "vector_ref": "vec://..."},
+    "semantic": {"provider": "local", "model": "BAAI/bge-m3", "dims": 1024, "vector_ref": "vec://..."},
     "rule_violation": {"secret": 0, "sast_high": 1, "license_unknown": 2},
     "test_evidence": {"unit_pass_rate": 0.97, "changed_modules_tested": 4},
     "risk": {"prod_write": 0, "pii_level": 1, "network_egress": 1},
@@ -98,9 +98,9 @@ class TestStateVectorSchema:
             assert field in vector
 
     def test_semantic_dims_valid(self):
-        # Default is 1536, can be reduced
+        # Default is BGE-M3 1024d; other dimensions are migration/alternate-provider cases.
         dims = STATE_VECTOR_SCHEMA["semantic"]["dims"]
-        assert dims in [1536, 3072, 512, 256]
+        assert dims in [1024, 1536, 3072, 512, 256]
 
 
 class TestDecisionPacketSchema:

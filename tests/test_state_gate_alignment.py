@@ -45,6 +45,11 @@ def test_decision_packet_contains_state_gate_required_fields():
     assert packet["run_id"] == "01HRUN0001"
     assert packet["trace_id"] == "a1b2c3d4e5f6789012345678901234ab"
     assert packet["state_vector_ref"] == "state://01HRUN0001"
+    assert packet["diff_hash"] == "sha256:abc123def456"
+    assert packet["artifact_ref"] == {
+        "uri": "artifact://local/01HART0001",
+        "diff_hash": "sha256:abc123def456",
+    }
     assert set(packet["static_gate_summary"]["gates_executed"]) == {"lint", "sast", "secret_scan"}
 
 
@@ -60,6 +65,22 @@ def test_service_stores_decision_and_state_vector_for_adapter_reads():
 
     assert service.decisions[packet["decision_id"]] == packet
     assert service.state_vectors_by_run["RUN-001"]["artifact_id"] == "ART-001"
+
+
+def test_service_fallback_semantic_uses_configured_bge_m3_dimensions():
+    service = GatefieldService()
+    packet = service.evaluate(
+        {
+            "artifact_id": "ART-002",
+            "trace": {"run_id": "RUN-002"},
+            "rule_results": {},
+        }
+    )
+
+    semantic = service.state_vectors_by_run[packet["run_id"]]["semantic"]
+    assert semantic["model"] == "BAAI/bge-m3"
+    assert semantic["dims"] == 1024
+    assert len(semantic["vector"]) == 1024
 
 
 def test_http_app_registers_state_gate_adapter_routes():

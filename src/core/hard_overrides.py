@@ -78,6 +78,15 @@ def apply_hard_overrides(
             action['checkpoint_ref'] = checkpoint_ref
         return action
 
+    def artifact_ref() -> Optional[Dict]:
+        ref = state_vector.get('artifact_ref')
+        diff_hash = state_vector.get('diff_hash', '')
+        if isinstance(ref, dict):
+            return ref
+        if ref:
+            return {'uri': ref, 'diff_hash': diff_hash}
+        return None
+
     # HO01: block_if_secret_found (STATE_TRANSITION_SPEC 3.1)
     if hard_overrides_config.get('block_if_secret_found', True):
         secret_count = rule_violation.get('secret', 0)
@@ -93,6 +102,8 @@ def apply_hard_overrides(
                 decision='block',
                 composite_score=1.0,
                 artifact_id=state_vector.get('artifact_id', ''),
+                artifact_ref=artifact_ref(),
+                diff_hash=state_vector.get('diff_hash', ''),
                 policy_version=policy_version,
                 factors=[ScoreFactor(
                     name='secret_detection',
@@ -130,6 +141,8 @@ def apply_hard_overrides(
                     decision='hold',
                     composite_score=0.85,
                     artifact_id=state_vector.get('artifact_id', ''),
+                    artifact_ref=artifact_ref(),
+                    diff_hash=state_vector.get('diff_hash', ''),
                     policy_version=policy_version,
                     factors=[ScoreFactor(
                         name='high_privilege_uncertainty',
@@ -161,6 +174,8 @@ def apply_hard_overrides(
             decision='block',
             composite_score=0.95,
             artifact_id=state_vector.get('artifact_id', ''),
+            artifact_ref=artifact_ref(),
+            diff_hash=state_vector.get('diff_hash', ''),
             policy_version=policy_version,
             factors=[ScoreFactor(
                 name='sast_high',
@@ -192,6 +207,8 @@ def apply_hard_overrides(
             decision='block',
             composite_score=1.0,
             artifact_id=state_vector.get('artifact_id', ''),
+            artifact_ref=artifact_ref(),
+            diff_hash=state_vector.get('diff_hash', ''),
             policy_version=policy_version,
             factors=[ScoreFactor(
                 name='tool_policy_deny',
@@ -227,6 +244,8 @@ def apply_hard_overrides(
                 decision='block',
                 composite_score=0.90,
                 artifact_id=state_vector.get('artifact_id', ''),
+                artifact_ref=artifact_ref(),
+                diff_hash=state_vector.get('diff_hash', ''),
                 policy_version=policy_version,
                 factors=[ScoreFactor(
                     name='prod_write_taboo',
@@ -283,6 +302,15 @@ def check_hard_override_ho02(
     def build_action(action_type: str) -> Dict:
         return {'action_type': action_type}
 
+    def artifact_ref() -> Optional[Dict]:
+        ref = state_vector.get('artifact_ref')
+        diff_hash = state_vector.get('diff_hash', '')
+        if isinstance(ref, dict):
+            return ref
+        if ref:
+            return {'uri': ref, 'diff_hash': diff_hash}
+        return None
+
     if hard_overrides_config.get('block_if_prod_write_and_taboo_warn', True):
         taboo_warn = thresholds.get('taboo_warn', 0.80)
         if risk.get('prod_write', 0) == 1 and taboo_score >= taboo_warn:
@@ -298,6 +326,8 @@ def check_hard_override_ho02(
                 decision='block',
                 composite_score=0.90,
                 artifact_id=state_vector.get('artifact_id', ''),
+                artifact_ref=artifact_ref(),
+                diff_hash=state_vector.get('diff_hash', ''),
                 policy_version=policy_version,
                 factors=[ScoreFactor(
                     name='prod_write_taboo',

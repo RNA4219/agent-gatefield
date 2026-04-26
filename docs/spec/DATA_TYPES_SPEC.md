@@ -867,6 +867,14 @@ The decision packet is the output from the gate evaluation containing the final 
       "type": "string",
       "description": "Policy version identifier"
     },
+    "artifact_ref": {
+      "type": ["object", "null"],
+      "description": "Artifact URI plus diff_hash for downstream approval binding"
+    },
+    "diff_hash": {
+      "type": "string",
+      "description": "Artifact diff hash mirrored at top level for adapter compatibility"
+    },
     "static_gate_summary": {
       "$ref": "#/definitions/StaticGateSummary",
       "description": "Summary of static gate results"
