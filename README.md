@@ -1,358 +1,396 @@
 # Agent Gatefield
 
-状態空間ゲートシステム - AIエージェント成果物の品質保証を「逸脱監視と境界調律」へ移行する制御面
+Agent Gatefield は、AI エージェントの成果物をそのまま通す前に、危ない兆候や品質のズレを検知して `pass` / `hold` / `block` に振り分けるゲートです。
 
-## 概要
+一言でいうと、AI エージェント用の「品質保証と安全確認の関所」です。
 
-本プロジェクトは既存ハーネスの制御面に「状態空間ゲート」を追加し、以下を実現：
+## まず何をするものか
 
-- **静的ゲート**: lint、型、SAST、secret scan、license scan等の決定論的判定
-- **状態空間ゲート**: 設計憲法、禁忌、採用/却下例、履歴ドリフト等の文脈依存判定
-- **人間介入**: アラート駆動の観測と介入（毎回承認ではなく）
+AI エージェントは、コード変更、設計文書、ツール実行計画、PR 提案などを自動で作ります。Agent Gatefield はそれらを受け取り、次の観点で判定します。
 
-## 実装状況 (2026-04-26) - MVP Complete ✓
+| 観点 | 見ているもの | 例 |
+|---|---|---|
+| 静的ゲート | 決定論的に分かる危険 | lint 失敗、型エラー、secret 混入、危険コマンド |
+| 状態空間ゲート | 文脈上の危険やズレ | 設計憲法との不一致、禁忌例への近さ、過去の却下例との類似 |
+| 人間レビュー | 自動で決めきれないもの | 高権限操作、不確実性が高い変更、判断根拠が薄い変更 |
 
-| コンポーネント | ファイル | 状態 |
-|-----------|------|--------|
-| Decision Engine | `src/core/engine.py` | **完了** |
-| 8判定器 | `src/scorers/__init__.py` | **完了** |
-| VectorStore + JudgmentKB | `src/vector_store/__init__.py` | **完了** |
-| StateEncoder | `src/encoder/state_encoder.py` | **完了** |
-| EmbeddingWorker (local-first) | `src/encoder/embedding_worker.py` | **完了** |
-| Static Gates (7 adapters) | `src/gates/static/__init__.py` | **完了** |
-| Calibration Pipeline | `src/core/calibration.py` | **完了** |
-| Replay Engine | `src/core/replay.py` | **完了** |
-| Review Queue | `src/review/queue.py` | **完了** |
-| Harness Adapters (4 adapters) | `src/adapters/harness.py` | **完了** |
-| HTTP Adapter Surface | `src/api/http_app.py` | **完了** |
-| Hard Override Rules | `src/core/hard_overrides.py` | **完了** |
-| SLA Handler | `src/core/sla_handler.py` | **完了** |
-| Threshold Versioning | `src/core/threshold_versioning.py` | **完了** |
-| Self Correction Tracker | `src/core/self_correction.py` | **完了** |
-| CLI (8 commands) | `cli/gate_cli.py` | **完了** |
-| Tests (676 tests) | `tests/` | **完了 (100% pass)** |
+判定結果は主に 3 種類です。
 
-**実装メトリクス:**
-- NotImplementedError: 0 (全て解消)
-- TODO: 0 (全て解消)
-- Tests: 676/676 passed (100%)
-- Pythonファイル: 45+
+| 判定 | 意味 | 次にすること |
+|---|---|---|
+| `pass` | 通してよい | 後続処理へ進める |
+| `hold` | 人間確認が必要 | review queue に積む |
+| `block` | 止めるべき | 修正または運用判断が必要 |
 
-**Production Status:**
-- PostgreSQL 17 + pgvector v0.7.4: Running (Windows service)
-- Judgment KB: Populated (constitution:16, taboo:22, accepted:15, rejected:13)
-- Mode: `enforce_warn_hold` (Shadow → Enforce transition ready)
-- Health Monitor: `scripts/monitor_health.py` (8 checks)
-- Dashboard Queries: `scripts/dashboard_queries.sql`
-- **Local Retrieval Stack: BGE-M3 + optional Qdrant + bge-reranker-v2-m3 implemented (no external API required)**
+`hold` や `block` は失敗ではありません。危険や不確実性を検知して止められている状態です。
 
-## 構成
+## 全体像
 
 ```
-agent-gatefield/
-├── src/
-│   ├── core/           # Decision engine, hard overrides, calibration, replay
-│   ├── gates/
-│   │   └── static/     # 静的ゲート adapters (7種)
-│   ├── scorers/        # 8判定器 + CompositeScorer
-│   ├── review/         # Human review queue + SLA
-│   ├── adapters/       # Harness adapters (Generic, OpenAI, Claude, LangGraph)
-│   ├── audit/          # 監査ログ
-│   ├── vector_store/   # PostgreSQL + pgvector interface + schema.sql
-│   └── encoder/        # State vector encoder + embedding worker
-├── config/             # YAML設定ファイル
-├── datasets/           # 評価データセット (JSONL)
-├── docs/               # 設計ドキュメント
-├── tests/              # テストスイート (647 tests)
-├── scripts/            # Production setup scripts
-├── cli/                # CLIツール (8 commands)
-├── docker-compose.yml  # PostgreSQL + pgvector
-├── pyproject.toml      # Python package config
-└── .env.example        # Environment template
+AI エージェントの実行
+        |
+        v
+Trace / Artifact / Static gate result
+        |
+        v
+StateEncoder
+  - 実行内容を状態ベクトルに変換
+  - BGE-M3 で意味ベクトル化
+        |
+        v
+DecisionEngine
+  - 静的ゲート
+  - 8 種類の scorer
+  - hard override
+        |
+        v
+DecisionPacket
+  - pass / hold / block
+  - score
+  - 理由
+  - audit 用 metadata
 ```
 
-## Production Deployment
+この README では、まず動かすために必要なことだけを説明します。詳細仕様は `docs/` 配下に分けています。
 
-### Option A: Docker (Recommended for all platforms)
+## 現在の状態
 
-```bash
-# Start PostgreSQL + pgvector
-docker compose up -d
+MVP は完成扱いです。
 
-# Wait for database to be ready
-docker compose logs postgres --tail 20
+| 項目 | 状態 |
+|---|---|
+| Decision Engine | 実装済み |
+| State Encoder | 実装済み |
+| BGE-M3 local embedding | 実装済み |
+| llama.cpp runtime adapter | 実装済み |
+| Qdrant vector store | 実装済み |
+| pgvector vector store | 実装済み |
+| bge-reranker-v2-m3 reranker | 実装済み |
+| Static gates | 実装済み |
+| Human review queue / SLA | 実装済み |
+| HTTP adapter | 実装済み |
+| CLI | 実装済み |
+| Tests | `1435 passed, 11 skipped` を確認済み |
+| Coverage | 80% 目標で妥協 |
 
-# Apply schema (automatic on first start)
-# Schema is applied via /docker-entrypoint-initdb.d/
+検収時点の主な確認結果:
 
-# Test connection
-python -c "from src.vector_store import VectorStore; vs = VectorStore(); print('Connected!')"
+```text
+uv run --offline --no-sync python -m pytest tests -q
+1435 passed, 11 skipped
+
+uv run --offline --no-sync python scripts/offline_eval.py --dataset all --dataset-dir datasets
+Overall: PASS / Passed: 6 / Failed: 0
+
+uv run --offline --no-sync python -m cli.gate_cli config validate -f config\gate-config.yaml
+Configuration is valid
 ```
 
-### Option B: Local PostgreSQL
+BGE-M3 / llama.cpp の実機経路も確認済みです。
 
-**Linux/macOS:**
-```bash
-# Install PostgreSQL + pgvector
-brew install postgresql@16 pgvector  # macOS
-sudo apt install postgresql-16 postgresql-16-vector  # Ubuntu
-
-# Run setup script
-bash scripts/setup-production.sh
+```text
+BAAI/bge-m3 1024 1024 success llama.cpp
 ```
 
-**Windows:**
+## 最短で動かす
+
+このプロジェクトは Python パッケージです。普段の検証は `uv` を使う前提にしています。
+
 ```powershell
-# Install PostgreSQL via winget
-winget install PostgreSQL.PostgreSQL.17
+cd C:\Users\ryo-n\Codex_dev\agent-gatefield
 
-# Run setup script (PowerShell)
-.\scripts\setup-production.ps1
+# 設定ファイルが正しいか確認
+uv run --offline --no-sync python -m cli.gate_cli config validate -f config\gate-config.yaml
 
-# Note: pgvector requires manual installation on Windows
-# See: scripts/download-pgvector.ps1 or use Docker
+# サンプル run を評価する
+uv run --offline --no-sync python -m cli.gate_cli dry-run --run-id local-retrieval-check --json
+
+# テストを回す
+uv run --offline --no-sync python -m pytest tests -q
 ```
 
-### Development Mode (Local Embedding)
+`dry-run` は判定が `hold` や `block` の場合、非 0 終了になることがあります。JSON が出ていて `decision` が読めるなら、CLI が壊れているわけではありません。
 
-Development mode runs without database connection and without external embedding API keys:
+例:
 
-```bash
-# Set environment
-cp .env.example .env
-# Edit .env: DATABASE_URL=mock://development
-# Default embedding provider is local.
-
-# Run tests
-python -m pytest tests/ -v  # 647 tests
-
-# Run CLI
-python -m cli.gate_cli dry-run --run-id test-001
+```json
+{
+  "decision": "hold",
+  "action": {
+    "action_type": "human_review"
+  }
+}
 ```
 
-### Local Retrieval Stack Setup (BGE-M3 / bge-reranker-v2-m3)
+これは「人間確認に回す」という正常な判定です。
 
-Default embedding uses BGE-M3 (1024d) via sentence-transformers. **First-time setup requires network access to download models.**
+## 初回モデル準備
 
-```bash
-# Install optional dependencies for local embedding
-pip install -e ".[local-runtime,reranker,qdrant]"
+既定の semantic embedding は `BAAI/bge-m3` です。BGE-M3 の dense embedding は 1024 次元です。
 
-# First run will download BGE-M3 (~2.2GB) and bge-reranker-v2-m3 (~1.2GB)
-# Models are cached locally by sentence-transformers (usually in ~/.cache/torch/sentence_transformers/)
+重要な点:
 
-# Verify model download
-python -c "from sentence_transformers import SentenceTransformer; m = SentenceTransformer('BAAI/bge-m3'); print('Model loaded:', m.get_sentence_embedding_dimension())"
+- 初回だけモデルダウンロードが必要です。
+- ネットワークなし、モデルなしの状態では BGE-M3 実モデル推論はできません。
+- ただし、自動テストは fallback によりモデルなしでも通るようにしています。
+- fallback は意味検索としては使わず、テストや degraded mode 用です。
 
-# Offline fallback: If models not available, hash-based fallback is used automatically
-# This is NOT semantically meaningful, only for testing/fallback
-python -c "from src.encoder.embedding_worker import EmbeddingWorker; w = EmbeddingWorker(); print(w.process_text('test')[:3])"
+sentence-transformers で直接確認する場合:
+
+```powershell
+uv run python -c "from sentence_transformers import SentenceTransformer; m = SentenceTransformer('BAAI/bge-m3'); print(m.get_sentence_embedding_dimension())"
 ```
 
-**Offline environments**: Tests run without models using hash-based fallback. No network required after initial model download.
+期待値:
 
-| Component | Default Model | Size | Cache Location |
-|-----------|--------------|------|----------------|
-| Embedding | BAAI/bge-m3 | ~2.2GB | `~/.cache/torch/sentence_transformers/` |
-| Reranker | BAAI/bge-reranker-v2-m3 | ~1.2GB | `~/.cache/torch/sentence_transformers/` |
-| Vector Store | Qdrant | - | In-memory or Docker |
-
-**Alternative runtimes** (optional):
-- llama.cpp: HTTP server for embeddings (no model download in Python)
-- Ollama: Dev optional profile
-- LM Studio: Desktop optional profile
-- vLLM: GPU scale optional profile
-
-## CLI Commands
-
-```bash
-# Show help
-python -m cli.gate_cli --help
-
-# Config validation
-python -m cli.gate_cli config validate -f config/gate-config.yaml
-python -m cli.gate_cli config thresholds -f config/gate-config.yaml
-
-# Dry-run evaluation
-python -m cli.gate_cli dry-run --run-id test-001 --json
-
-# Score artifact
-python -m cli.gate_cli score --run-id test-001 --artifact artifact.json
-
-# Explain decision
-python -m cli.gate_cli explain --decision-id decision-001
-
-# Review operations
-python -m cli.gate_cli review list --stats
-python -m cli.gate_cli review take --severity critical
-python -m cli.gate_cli review resolve --decision-id review-001 --action approve
-
-# Knowledge base operations
-python -m cli.gate_cli kb import --axis taboo --file datasets/taboo_cases.jsonl
-python -m cli.gate_cli kb search --axis taboo --text "dangerous command"
-
-# Calibration
-python -m cli.gate_cli calibrate --dataset datasets/accepted_examples.jsonl
-
-# Replay for reproducibility verification
-python -m cli.gate_cli replay --run-id test-001 --threshold-version v1 --json
+```text
+1024
 ```
 
-## agent-state-gate Integration
+llama.cpp で使う場合は、BGE-M3 の GGUF が必要です。検収では `gpustack/bge-m3-GGUF` の `bge-m3-Q4_K_M.gguf` を使いました。
 
-`agent-state-gate` の `GatefieldAdapter` から接続する最小 HTTP surface を提供します。
+```powershell
+llama-server `
+  --embedding `
+  --host 127.0.0.1 `
+  --port 8080 `
+  --hf-repo gpustack/bge-m3-GGUF `
+  --hf-file bge-m3-Q4_K_M.gguf `
+  -c 2048
+```
 
-```bash
-agent-gatefield-api
+別のポートで起動する場合:
+
+```powershell
+$env:LLAMA_CPP_HOST="127.0.0.1"
+$env:LLAMA_CPP_PORT="18080"
+```
+
+## 主要設定
+
+主な設定ファイルは [config/gate-config.yaml](config/gate-config.yaml) です。
+
+特に見るべき箇所は `state_space_gate` です。
+
+```yaml
+state_space_gate:
+  enabled: true
+  mode: enforce_warn_hold
+  semantic_embedding:
+    provider: local
+    runtime: llama.cpp
+    model: BAAI/bge-m3
+    dimensions: 1024
+    fallback_model: local-hash-embedding-v1
+  reranker:
+    enabled: true
+    model: BAAI/bge-reranker-v2-m3
+  vector_store:
+    backend: qdrant
+    collection: gatefield_judgments
+    dense_dimensions: 1024
+```
+
+`mode` の意味:
+
+| mode | 意味 |
+|---|---|
+| `shadow` | 判定は記録するが止めない |
+| `enforce_warn_hold` | 危険度に応じて warning / hold する |
+| `enforce_block` | block 条件に該当したら止める |
+
+今の既定は `enforce_warn_hold` です。
+
+## CLI の使い方
+
+よく使うコマンドだけを載せます。
+
+```powershell
+# ヘルプ
+uv run python -m cli.gate_cli --help
+
+# 設定検証
+uv run python -m cli.gate_cli config validate -f config\gate-config.yaml
+
+# 閾値を見る
+uv run python -m cli.gate_cli config thresholds -f config\gate-config.yaml
+
+# サンプル評価
+uv run python -m cli.gate_cli dry-run --run-id test-001 --json
+
+# artifact を採点
+uv run python -m cli.gate_cli score --run-id test-001 --artifact artifact.json
+
+# 人間レビュー一覧
+uv run python -m cli.gate_cli review list --stats
+
+# Knowledge Base にデータを入れる
+uv run python -m cli.gate_cli kb import --axis taboo --file datasets\taboo_cases.jsonl
+
+# Knowledge Base を検索する
+uv run python -m cli.gate_cli kb search --axis taboo --text "dangerous command"
+
+# offline 評価
+uv run python scripts\offline_eval.py --dataset all --dataset-dir datasets
+```
+
+## HTTP API
+
+`agent-state-gate` など外部制御面から接続するための HTTP surface があります。
+
+起動:
+
+```powershell
+uv run agent-gatefield-api
+```
+
+health check:
+
+```powershell
 curl http://127.0.0.1:8080/v1/health
 ```
 
-| Endpoint | Purpose |
+主な endpoint:
+
+| Endpoint | 用途 |
 |---|---|
 | `GET /v1/health` | health check |
-| `POST /v1/evaluate` | DecisionPacket generation |
-| `POST /v1/review/items` | enqueue human review |
-| `GET /v1/decisions/{decision_id}` | get DecisionPacket |
-| `GET /v1/state-vectors/{run_id}` | get StateVector |
-| `GET /v1/audit/{run_id}` | export audit events |
+| `POST /v1/evaluate` | DecisionPacket を作る |
+| `POST /v1/review/items` | human review に積む |
+| `GET /v1/decisions/{decision_id}` | 判定結果を取得 |
+| `GET /v1/state-vectors/{run_id}` | 状態ベクトルを取得 |
+| `GET /v1/audit/{run_id}` | audit event を取得 |
 
-## クイックスタート
+## 依存サービス
 
-```bash
-# Install dependencies
-pip install -e ".[dev,postgres,vector]"
+用途によって必要なものが変わります。
 
-# Run all tests
-python -m pytest tests/ -v  # 647 tests, 100% pass
+| 用途 | 必要なもの | 備考 |
+|---|---|---|
+| unit test | Python 依存のみ | モデルなしでも fallback で通す |
+| BGE-M3 実推論 | BGE-M3 モデル | 初回ダウンロードが必要 |
+| llama.cpp 実推論 | `llama-server` と GGUF | 既定 runtime |
+| Qdrant 検証 | Qdrant または in-memory Qdrant | local retrieval profile |
+| pgvector 検証 | PostgreSQL + pgvector | 永続 DB profile |
 
-# Import modules
-python -c "
-from src.core.engine import DecisionEngine, GateState
-from src.scorers import CompositeScorer
-from src.vector_store import VectorStore
-from src.review.queue import ReviewQueue
-from cli.gate_cli import main
-print('All modules imported successfully')
-"
+Docker で PostgreSQL + pgvector を起動する場合:
 
-# View configuration
-cat config/gate-config.yaml
+```powershell
+docker compose up -d
+docker compose logs postgres --tail 20
 ```
 
-## 参照ドキュメント
+Qdrant はこの `docker-compose.yml` には含まれていません。Qdrant を実プロセスで使う場合は別途起動してください。テストでは in-memory / mock / fallback 経路も使います。
 
-- `docs/requirements.md` - 要件定義書（詳細）
-- `docs/RUNBOOK.md` - 運用手順書
-- `docs/EVALUATION.md` - 検収条件、運用 KPI、readiness gates
-- `docs/architecture.md` - アーキテクチャ設計
-- `docs/security.md` - OWASP LLM Top 10対応
-- `src/vector_store/schema.sql` - Database schema
+## 環境変数
 
-## MVP スコープ
+`.env.example` をコピーして必要に応じて変更します。
 
-1. Trace収集、静的ゲート統合 **[完了]**
-2. Judgment KB + embedding pipeline **[完了]**
-3. 状態エンコーダ + 判定器群 **[完了]**
-4. Human review queue **[完了]**
-5. Shadow mode → enforce 移行 **[完了]**
+```powershell
+Copy-Item .env.example .env
+```
 
-## Product Readiness Gates
+代表的な設定:
 
-| Gate | Required Evidence | Status |
-|------|-------------------|--------|
-| MVP start | harness contract reviewed, data protection approved, reviewer owners assigned | **完了** |
-| Shadow mode | 95%+ state vector coverage, audit completeness, no raw payload mis-storage | **完了** |
-| Warn/hold enforce | review queue connected, SLA dashboard active, correction writeback verified | **完了** |
-| Block enforce | operational KPI met, replay reproducibility 99%+, critical miss rate 0% | **完了** |
-
-## Environment Variables
-
-```bash
-# Required for production
-DATABASE_URL=postgresql://gatefield:password@localhost:5432/gatefield
-
-# Local Retrieval Stack (BGE-M3 / pgvector default / optional Qdrant / bge-reranker-v2-m3)
-# No external API key required for semantic embedding
+```env
 EMBEDDING_PROVIDER=local
 EMBEDDING_RUNTIME=llama.cpp
 EMBEDDING_MODEL=BAAI/bge-m3
 EMBEDDING_DIMENSIONS=1024
 EMBEDDING_FALLBACK_MODEL=local-hash-embedding-v1
 
-# Reranker configuration
 RERANKER_ENABLED=true
 RERANKER_MODEL=BAAI/bge-reranker-v2-m3
 
-# Vector store
-# agent-state-gate integration default is pgvector.
-VECTOR_STORE_BACKEND=pgvector
+VECTOR_STORE_BACKEND=qdrant
 QDRANT_COLLECTION=gatefield_judgments
 QDRANT_HOST=localhost
 QDRANT_PORT=6333
 
-# Optional: OpenAI API (alternative embedding provider)
-# OPENAI_API_KEY=sk-...
-# OPENAI_API_BASE=https://api.openai.com/v1
-
-# Optional
-POSTGRES_USER=gatefield
-POSTGRES_PASSWORD=gatefield_prod_password
-POSTGRES_DB=gatefield
+DATABASE_URL=postgresql://gatefield:gatefield_prod_password@localhost:5432/gatefield
 THRESHOLD_VERSION=v1
-LOG_LEVEL=INFO
-ENV_MODE=production  # or "development" for mock/fallback mode
+ENV_MODE=development
 ```
 
-## Docker Compose Services
+OpenAI API key は既定では不要です。
 
-| Service | Port | Purpose |
-|---------|------|---------|
-| postgres | 5432 | PostgreSQL + pgvector database |
-| adminer | 8080 | Database admin UI (--profile admin) |
-| pgadmin | 5050 | PostgreSQL admin (--profile pgadmin) |
+## ディレクトリ構成
 
-```bash
-# Start with admin UI
-docker compose --profile admin up -d
-
-# View logs
-docker compose logs -f postgres
-
-# Stop services
-docker compose down -v  # -v removes volumes
+```text
+agent-gatefield/
+├── cli/                 # CLI entrypoint
+├── config/              # gate-config.yaml
+├── datasets/            # offline eval 用 JSONL
+├── docs/                # 仕様、運用、検収資料
+├── scripts/             # setup / eval / monitoring scripts
+├── src/
+│   ├── adapters/        # harness adapter
+│   ├── api/             # HTTP API
+│   ├── audit/           # audit logging
+│   ├── core/            # DecisionEngine / calibration / replay / SLA
+│   ├── encoder/         # StateEncoder / EmbeddingWorker / runtime adapter
+│   ├── gates/           # static gates
+│   ├── review/          # human review queue
+│   ├── scorers/         # state-space scorers
+│   └── vector_store/    # pgvector / Qdrant / KB
+└── tests/               # automated tests
 ```
 
-## Test Coverage
+最初に読むなら、以下の順がおすすめです。
 
-```
-tests/
-├── test_calibration.py     # Threshold calibration (100 tests)
-├── test_encoder.py         # State encoding (70 tests)
-├── test_scorers.py         # 8 scorers + composite (80 tests)
-├── test_security.py        # OWASP LLM Top 10 + hard overrides (30 tests)
-├── test_self_correction.py # Self-correction tracking (40 tests)
-├── test_static_gates.py    # Static gate adapters (50 tests)
-├── test_review_queue.py    # Human review + SLA (150 tests)
-├── test_vector_store.py    # Vector store operations (100 tests)
-├── test_integration.py     # End-to-end integration (26 tests)
-└── conftest.py             # Shared fixtures
+1. この README
+2. [docs/RUNBOOK.md](docs/RUNBOOK.md)
+3. [docs/EVALUATION.md](docs/EVALUATION.md)
+4. [docs/architecture.md](docs/architecture.md)
+5. [docs/spec/API_SPEC.md](docs/spec/API_SPEC.md)
 
-Total: 647 tests, 100% pass rate
-```
+## 用語
 
-## API Specification
+| 用語 | 意味 |
+|---|---|
+| artifact | エージェントが作った成果物。コード差分、文書、実行計画など |
+| trace | エージェント実行中のイベント履歴 |
+| state vector | artifact と trace を判定しやすい形に変換した状態 |
+| scorer | state vector の一部を採点する部品 |
+| hard override | secret 検出など、score に関係なく止めるルール |
+| DecisionPacket | 最終判定、score、理由、audit 情報を含む結果 |
+| Judgment KB | 憲法、禁忌例、採用例、却下例を入れる知識ベース |
+| fallback embedding | モデルが使えないときの deterministic hash vector |
 
-See `docs/API_SPEC.md` for detailed API endpoints:
+## よくあるつまずき
 
-- `evaluate(state_vector) -> DecisionResult`
-- `search_similar(query_vector, axis, limit) -> SearchResult[]`
-- `replay_run(run_id, threshold_version) -> ReplayResult`
-- `resolve_review(decision_id, action) -> ReviewAction`
+### `dry-run` が exit 1 になる
+
+`decision: hold` や `decision: block` の場合は非 0 終了になることがあります。JSON が出ていれば、判定処理自体は動いています。
+
+### ネットワークなしで BGE-M3 が動かない
+
+正常です。初回のモデルダウンロードにはネットワークが必要です。モデル取得後はローカルキャッシュから使えます。
+
+### モデルなしでもテストが通るのはなぜか
+
+テストでは実モデルを必須にせず、fallback embedding を使えるようにしています。これは CI や offline 検収を安定させるためです。本番品質の意味検索には BGE-M3 を使ってください。
+
+### Qdrant が起動していない
+
+Qdrant 実プロセスが必要な検証では起動してください。一方、unit test は in-memory / mock / fallback で通るようにしています。
+
+### Coverage が 100% ではない
+
+現在は 80% 目標で妥協しています。実モデル、vector DB、HTTP、CLI、review flow が絡むため、数字だけを追うと brittle なテストが増えます。受入では、主要リスクの実測と contract test を優先しています。
+
+## 参照ドキュメント
+
+| ファイル | 目的 |
+|---|---|
+| [docs/RUNBOOK.md](docs/RUNBOOK.md) | 運用手順 |
+| [docs/EVALUATION.md](docs/EVALUATION.md) | 検収条件、KPI、readiness gate |
+| [docs/architecture.md](docs/architecture.md) | アーキテクチャ概要 |
+| [docs/security.md](docs/security.md) | security / OWASP LLM Top 10 対応 |
+| [docs/spec/API_SPEC.md](docs/spec/API_SPEC.md) | API 詳細 |
+| [docs/spec/DATA_TYPES_SPEC.md](docs/spec/DATA_TYPES_SPEC.md) | データ型詳細 |
+| [src/vector_store/schema.sql](src/vector_store/schema.sql) | pgvector schema |
 
 ## License
 
-MIT License - See `LICENSE` file.
-
-## Contributors
-
-Gatefield Team
+MIT License. See [LICENSE](LICENSE).
