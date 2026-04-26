@@ -29,13 +29,21 @@ This runbook provides operational guidance for running, monitoring, and troubles
 **Implementation Metrics:**
 - NotImplementedError: 0 (all resolved)
 - TODO items: 0 (all resolved)
-- Tests: 686/686 passed (100%)
-- Coverage: 63% (target: 85%)
+- Tests: 788/788 passed (100%)
+- Coverage: 70% (target: 85%)
 - Python files: 72
-- Test files: 14
+- Test files: 18
 - Mock cleanup: @patch 154→0, Mock() 157→0 (100% reduction)
 - Complexity reduction: 215→165 (23% reduction)
-- Completion: 70%
+- Completion: 75%
+
+**Coverage Improvements:**
+| Module | Before | After | Tests Added |
+|--------|--------|-------|-------------|
+| threshold_versioning | 40% | 100% | 23 |
+| replay | 0% | 79% | 18 |
+| rerank | 37% | 66% | 33 |
+| adapters | 0% | 57%+ | 28 |
 
 **Technical Debt Status:**
 | File | Before | After | Status |
