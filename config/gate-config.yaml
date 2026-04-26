@@ -1,0 +1,194 @@
+# Project: agent-gatefield
+# State Space Gate Configuration Template
+
+project: service-a
+environment: staging
+
+harness:
+  implementation: python-adapter
+  trace_backend: otel
+  checkpointing: true
+  required_contracts:
+    run_lifecycle_events: true
+    pause_resume: true
+    tool_policy_hook: true
+    artifact_snapshot: true
+    static_gate_result_ingest: true
+    trace_correlation: true
+    replay: true
+
+static_gates:
+  lint:
+    enabled: true
+    severity: high
+  typecheck:
+    enabled: true
+    severity: high
+  tests:
+    enabled: true
+    min_pass_rate: 1.0
+  sast:
+    enabled: true
+    engine: semgrep
+    rulesets:
+      - defaults
+      - custom/org-security
+  codeql:
+    enabled: true
+  secret_scan:
+    enabled: true
+    engine: trivy
+  license_scan:
+    enabled: true
+    engine: trivy
+  tool_policy:
+    enabled: true
+    mode: deny_on_match
+    deny_patterns:
+      - "rm -rf /"
+      - "DROP DATABASE"
+      - "kubectl delete --all"
+
+state_space_gate:
+  enabled: true
+  mode: enforce_warn_hold  # shadow -> enforce_warn_hold -> enforce_block
+  semantic_embedding:
+    provider: local
+    runtime: llama.cpp
+    model: BAAI/bge-m3
+    dimensions: 1024
+    fallback_model: local-hash-embedding-v1
+  reranker:
+    enabled: true
+    provider: local
+    runtime: llama.cpp
+    model: BAAI/bge-reranker-v2-m3
+    top_k_input: 50
+    top_k_output: 10
+  axes:
+    constitution: true
+    taboo: true
+    accepted_examples: true
+    rejected_examples: true
+    judgment_logs: true
+    uncertainty: true
+  vector_store:
+    backend: qdrant
+    collection: gatefield_judgments
+    distance: cosine
+    dense_dimensions: 1024
+    # Alternative backends for dev/edge profiles
+    alternatives:
+      - pgvector
+      - lancdb
+      - sqlite_vec
+  runtime_profiles:
+    default: llama.cpp
+    dev_optional: ollama
+    desktop_optional: lm_studio
+    scale_optional: vllm
+  scorers:
+    constitution_alignment:
+      weight: 0.20
+    taboo_proximity:
+      weight: 0.30
+    accept_similarity:
+      weight: 0.10
+    reject_similarity:
+      weight: 0.15
+    direction:
+      weight: 0.05
+    drift:
+      weight: 0.05
+    anomaly:
+      weight: 0.10
+    uncertainty:
+      weight: 0.05
+  thresholds:
+    taboo_warn: 0.80
+    taboo_block: 0.88
+    reject_warn: 0.75
+    reject_block: 0.85
+    anomaly_warn_percentile: 95
+    anomaly_block_percentile: 99
+    judge_std_warn: 0.15
+    judge_std_block: 0.25
+    tool_failure_warn: 0.10
+    tool_failure_block: 0.25
+    direction_block: -0.50
+  hard_overrides:
+    block_if_secret_found: true
+    block_if_prod_write_and_taboo_warn: true
+    hold_if_high_privilege_and_uncertain: true
+
+actions:
+  artifact_correction: true
+  process_correction: true
+  prompt_correction: true
+  max_self_correction_loops: 2
+
+human_review:
+  queue_backend: annotation_queue
+  dashboard: required
+  min_reviewers: 2
+  timeout_policy: fail_closed
+  sla:
+    critical_ack_minutes: 15
+    critical_decision_minutes: 60
+    high_ack_minutes: 60
+    high_decision_minutes: 240
+
+data_protection:
+  classification:
+    levels:
+      - public
+      - internal
+      - confidential
+      - pii-sensitive
+      - restricted
+    default_if_unknown: restricted
+  raw_prompt_storage: false
+  raw_tool_payload_storage: false
+  redaction:
+    required_before_persist: true
+    version: redaction-policy-v1
+  external_managed_service:
+    allowed: false
+    required_checks:
+      - data_residency
+      - retention
+      - purge_api
+      - audit_export
+
+audit:
+  enabled: true
+  retention_days:
+    audit: 365
+    traces: 180
+    redacted_artifacts: 90
+    raw_prompts: 0
+  export:
+    - otlp
+    - jsonl
+
+operational_kpis:
+  review_load_reduction_min: 0.30
+  critical_miss_rate_max: 0.0
+  high_miss_rate_max: 0.05
+  false_escalation_rate_max: 0.15
+  explanation_usefulness_min: 0.80
+  replay_reproducibility_min: 0.99
+
+cost_guardrails:
+  monthly_budget_usd: 500
+  warn_at_ratio: 0.80
+  hold_at_ratio: 1.00
+
+datasets:
+  split:
+    calibration: true
+    validation: true
+    acceptance: true
+  label_reviewers_min: 2
+  acceptance_redaction_required: true
+  version_lock_required: true

@@ -1,0 +1,25 @@
+"""
+Sample dataset files for MVP
+"""
+
+# static_violation_suite.jsonl - 50 items
+# This file would contain curated static gate violations
+
+# Example format:
+# {"id": "sv001", "gate": "lint", "expected": "fail", "severity": "high", "pattern": "..."}
+# {"id": "sv002", "gate": "secret_scan", "expected": "fail", "severity": "critical", "pattern": "api_key=sk-..."}
+
+# taboo_cases.jsonl - 100 items
+# {"id": "t001", "category": "dangerous_tool", "severity": "high", "text": "...", "expected_gate": "hold"}
+
+# accepted_examples.jsonl - 200 items
+# {"id": "a001", "artifact_type": "code_patch", "text": "...", "review_comments": ["clean", "follows conventions"]}
+
+# rejected_examples.jsonl - 100 items
+# {"id": "r001", "artifact_type": "code_patch", "text": "...", "reject_reason": "violates separation of concerns"}
+
+# drift_sequences.jsonl - 50 sequences
+# {"id": "d001", "steps": [...], "drift_point": 5, "drift_type": "semantic", "expected_gate": "warn"}
+
+# Placeholder for actual dataset collection
+# These files need to be populated with real project-specific data

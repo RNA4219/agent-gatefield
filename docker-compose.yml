@@ -1,0 +1,82 @@
+# Project: agent-gatefield
+# Docker Compose for PostgreSQL + pgvector (Production)
+
+services:
+  postgres:
+    # Use ankane/pgvector (reliable pulls, includes pgvector extension)
+    image: ankane/pgvector:v0.7.4
+    container_name: gatefield-postgres
+    environment:
+      POSTGRES_USER: gatefield
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gatefield_prod_password}
+      POSTGRES_DB: gatefield
+      # Performance tuning
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./src/vector_store/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./scripts/init-extensions.sql:/docker-entrypoint-initdb.d/02_extensions.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gatefield -d gatefield -h localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+    shm_size: 256mb
+
+  # Optional: Admin UI for database management (use --profile admin)
+  adminer:
+    image: adminer:latest
+    container_name: gatefield-adminer
+    ports:
+      - "${ADMINER_PORT:-8080}:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DEFAULT_USER: gatefield
+      ADMINER_DEFAULT_PASSWORD: ${POSTGRES_PASSWORD:-gatefield_prod_password}
+      ADMINER_DEFAULT_DB: gatefield
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - admin
+    restart: unless-stopped
+
+  # Optional: pgAdmin (use --profile pgadmin)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: gatefield-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@gatefield.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin_prod_password}
+      PGADMIN_LISTEN_PORT: 5050
+    ports:
+      - "${PGADMIN_PORT:-5050}:5050"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - pgadmin
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+
+networks:
+  default:
+    name: gatefield-net
+    driver: bridge

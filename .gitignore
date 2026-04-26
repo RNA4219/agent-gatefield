@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.pyo
+.pytest_cache/
+.mypy_cache/
+
+# Build
+dist/
+build/
+*.egg-info/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Secrets
+.env
+*.pem
+*.key
+credentials.json
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite
+
+# Test artifacts
+coverage/
+.coverage
+htmlcov/
+
+# Temporary
+tmp/
+temp/
+*.tmp
