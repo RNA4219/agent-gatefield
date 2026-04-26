@@ -29,13 +29,13 @@ This runbook provides operational guidance for running, monitoring, and troubles
 **Implementation Metrics:**
 - NotImplementedError: 0 (all resolved)
 - TODO items: 0 (all resolved)
-- Tests: 891/891 passed (100%)
-- Coverage: 73% (target: 85%)
+- Tests: 1014/1014 passed (100%)
+- Coverage: 77% (target: 90%)
 - Python files: 72
-- Test files: 21
+- Test files: 24
 - Mock cleanup: @patch 154→0, Mock() 157→0 (100% reduction)
 - Complexity reduction: 215→165 (23% reduction)
-- Completion: 80%
+- Completion: 85%
 
 **Coverage Improvements:**
 | Module | Before | After | Tests Added |
@@ -43,12 +43,17 @@ This runbook provides operational guidance for running, monitoring, and troubles
 | threshold_versioning | 40% | 100% | 23 |
 | replay | 0% | 79% | 18 |
 | rerank | 37% | 66% | 33 |
-| adapters | 0% | 57%+ | 28 |
 | encoder/utils | 40% | 100% | 11 |
 | core/sla_handler | 21% | 93% | 25 |
 | qdrant_store | 41% | 65% | 29 |
 | scorers/base | 59% | 98% | 21 |
 | vector_store/__init__ | 53% | 100% | 17 |
+| embedding_worker | 33% | 41% | 27 |
+| online_calibration | 26% | 97% | 35 |
+| drift_detection | 57% | 100% | 30 |
+| claude_adapter | 30% | 98% | 31 |
+| openai_adapter | 39% | 98% | 31 |
+| langgraph_adapter | 48% | 97% | 31 |
 
 **Technical Debt Status:**
 | File | Before | After | Status |
