@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-04-27
+
+### Changed
+
+- `src/core/types.py` / `src/core/engine.py` / `src/core/hard_overrides.py`: DecisionPacket に `artifact_ref` と `diff_hash` を保持し、agent-state-gate 側の approval binding と整合させた
+- `src/api/http_app.py`: fallback semantic vector を `BAAI/bge-m3` / 1024d に同期
+- `docs/spec/DATA_TYPES_SPEC.md` / `tests/test_state_gate_alignment.py` / `tests/test_schema_contract.py`: DecisionPacket と state vector contract の回帰検証を更新
+
+### Verification
+
+- `tests/test_state_gate_alignment.py`, `tests/test_schema_contract.py`, `tests/test_engine.py` が pass
+- `config/gate-config.yaml` の validate が pass
+
 ## 2026-04-26
 
 ### Changed

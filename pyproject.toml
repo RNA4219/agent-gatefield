@@ -1,6 +1,6 @@
 [project]
 name = "agent-gatefield"
-version = "1.0.0"
+version = "1.0.1"
 description = "State Space Gate System - AI Agent Artifact Quality Assurance"
 readme = "README.md"
 requires-python = ">=3.10"
