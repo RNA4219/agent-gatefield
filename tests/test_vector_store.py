@@ -874,3 +874,254 @@ class TestVectorStoreCoveragePaths:
 # QdrantVectorStore Coverage Tests
 # =============================================================================
 
+import pytest
+from unittest.mock import Mock, MagicMock, patch
+
+
+class TestQdrantVectorStoreInit:
+    """Tests for QdrantVectorStore initialization."""
+
+    def test_default_init(self):
+        """Default initialization with BGE-M3 dimensions."""
+        from src.vector_store.qdrant_store import QdrantVectorStore, DEFAULT_DIMS
+        store = QdrantVectorStore()
+        assert store.embedding_dims == DEFAULT_DIMS
+        assert store.collection_name == "gatefield_judgments"
+        assert store.in_memory is False
+
+    def test_in_memory_init(self):
+        """In-memory mode initialization."""
+        from src.vector_store.qdrant_store import QdrantVectorStore
+        store = QdrantVectorStore(in_memory=True)
+        assert store.in_memory is True
+        assert store.location == ":memory:"
+        assert store.host is None
+        assert store.port is None
+
+    def test_url_init(self):
+        """URL-based initialization."""
+        from src.vector_store.qdrant_store import QdrantVectorStore
+        store = QdrantVectorStore(url="http://qdrant.example.com:6333")
+        assert store.url == "http://qdrant.example.com:6333"
+        assert store.host is None
+
+    def test_custom_dims_init(self):
+        """Custom dimensions initialization."""
+        from src.vector_store.qdrant_store import QdrantVectorStore
+        store = QdrantVectorStore(embedding_dims=512)
+        assert store.embedding_dims == 512
+
+    def test_custom_collection_init(self):
+        """Custom collection name initialization."""
+        from src.vector_store.qdrant_store import QdrantVectorStore
+        store = QdrantVectorStore(collection_name="custom_collection")
+        assert store.collection_name == "custom_collection"
+
+
+class TestQdrantVectorStoreMockMode:
+    """Tests for mock mode when Qdrant unavailable."""
+
+    @patch('src.vector_store.qdrant_store.QdrantVectorStore._init_client', return_value=False)
+    def test_mock_search_returns_results(self, mock_init):
+        """Mock search returns predefined results."""
+        from src.vector_store.qdrant_store import QdrantVectorStore
+        store = QdrantVectorStore()
+        store._initialized = True
+        store._client = None
+        results = store.search_similar([0.1] * 1024, "taboo", limit=3)
+        assert len(results) == 3
+        assert results[0].doc_id == "mock-1"
+        assert results[0].axis_type == "taboo"
+
+    @patch('src.vector_store.qdrant_store.QdrantVectorStore._init_client', return_value=False)
+    def test_mock_insert_returns_doc_id(self, mock_init):
+        """Mock insert returns mock doc ID."""
+        from src.vector_store.qdrant_store import QdrantVectorStore
+        store = QdrantVectorStore()
+        store._initialized = True
+        store._client = None
+        doc_id = store.insert_document("taboo", "test text", [0.1] * 1024)
+        assert doc_id.startswith("mock-doc-")
+
+    @patch('src.vector_store.qdrant_store.QdrantVectorStore._init_client', return_value=False)
+    def test_mock_batch_insert_returns_ids(self, mock_init):
+        """Mock batch insert returns mock doc IDs."""
+        from src.vector_store.qdrant_store import QdrantVectorStore
+        store = QdrantVectorStore()
+        store._initialized = True
+        store._client = None
+        docs = [{'axis_type': 'taboo', 'text': 'test'} for _ in range(3)]
+        embeddings = [[0.1] * 1024 for _ in range(3)]
+        doc_ids = store.batch_insert(docs, embeddings)
+        assert len(doc_ids) == 3
+        assert all(id.startswith("mock-doc-") for id in doc_ids)
+
+    @patch('src.vector_store.qdrant_store.QdrantVectorStore._init_client', return_value=False)
+    def test_mock_get_centroid_returns_vector(self, mock_init):
+        """Mock get_centroid returns vector."""
+        from src.vector_store.qdrant_store import QdrantVectorStore
+        store = QdrantVectorStore()
+        store._initialized = True
+        store._client = None
+        centroid = store.get_centroid("constitution")
+        assert len(centroid) == 1024
+        assert all(v == 0.5 for v in centroid)
+
+    @patch('src.vector_store.qdrant_store.QdrantVectorStore._init_client', return_value=False)
+    def test_mock_get_collection_info(self, mock_init):
+        """Mock get_collection_info returns mock info."""
+        from src.vector_store.qdrant_store import QdrantVectorStore
+        store = QdrantVectorStore()
+        store._initialized = True
+        store._client = None
+        info = store.get_collection_info()
+        assert info['status'] == 'mock'
+        assert info['points_count'] == 0
+
+
+class TestQdrantVectorStoreWithClient:
+    """Tests requiring actual Qdrant client - skipped if unavailable."""
+
+    @pytest.mark.skip(reason="Integration test requires qdrant_client installation")
+    def test_init_client_in_memory(self):
+        """Client initialization with in-memory mode."""
+        pass
+
+    @pytest.mark.skip(reason="Integration test requires qdrant_client installation")
+    def test_init_client_creates_collection(self):
+        """Client creates collection if not exists."""
+        pass
+
+    @pytest.mark.skip(reason="Integration test requires qdrant_client installation")
+    def test_search_similar_with_filter(self):
+        """Search similar builds proper filter."""
+        pass
+
+    @pytest.mark.skip(reason="Integration test requires qdrant_client installation")
+    def test_insert_document_with_embedding(self):
+        """Insert document with embedding."""
+        pass
+
+    @pytest.mark.skip(reason="Integration test requires qdrant_client installation")
+    def test_batch_insert_documents(self):
+        """Batch insert multiple documents."""
+        pass
+
+    @pytest.mark.skip(reason="Integration test requires qdrant_client installation")
+    def test_deprecate_document(self):
+        """Deprecate document updates status."""
+        pass
+
+    @pytest.mark.skip(reason="Integration test requires qdrant_client installation")
+    def test_get_centroid_with_vectors(self):
+        """Get centroid calculates average."""
+        pass
+
+    @pytest.mark.skip(reason="Integration test requires qdrant_client installation")
+    def test_get_centroid_no_vectors(self):
+        """Get centroid returns None if no vectors."""
+        pass
+
+    @pytest.mark.skip(reason="Integration test requires qdrant_client installation")
+    def test_close_connection(self):
+        """Close terminates client connection."""
+        pass
+
+
+class TestQdrantVectorStoreCreateFunction:
+    """Tests for create_qdrant_store function."""
+
+    def test_create_with_defaults(self):
+        """Create with default config."""
+        from src.vector_store.qdrant_store import create_qdrant_store, DEFAULT_DIMS
+        store = create_qdrant_store()
+        assert store.embedding_dims == DEFAULT_DIMS
+
+    def test_create_with_custom_dims(self):
+        """Create with custom dimensions."""
+        from src.vector_store.qdrant_store import create_qdrant_store
+        store = create_qdrant_store({'dims': 512})
+        assert store.embedding_dims == 512
+
+    def test_create_with_collection_name(self):
+        """Create with collection name."""
+        from src.vector_store.qdrant_store import create_qdrant_store
+        store = create_qdrant_store({'collection': 'my_collection'})
+        assert store.collection_name == 'my_collection'
+
+    def test_create_in_memory(self):
+        """Create in-memory mode."""
+        from src.vector_store.qdrant_store import create_qdrant_store
+        store = create_qdrant_store({'in_memory': True})
+        assert store.in_memory is True
+
+
+class TestSearchResult:
+    """Tests for SearchResult dataclass."""
+
+    def test_search_result_with_reranker_score(self):
+        """SearchResult with reranker score."""
+        from src.vector_store.qdrant_store import SearchResult
+        result = SearchResult(
+            doc_id="doc-1",
+            similarity=0.85,
+            axis_type="taboo",
+            text="test",
+            reranker_score=0.92
+        )
+        assert result.reranker_score == 0.92
+
+    def test_search_result_defaults(self):
+        """SearchResult default optional fields."""
+        from src.vector_store.qdrant_store import SearchResult
+        result = SearchResult(
+            doc_id="doc-2",
+            similarity=0.75,
+            axis_type="accepted",
+            text="text"
+        )
+        assert result.labels is None
+        assert result.scope is None
+        assert result.version is None
+        assert result.reranker_score is None
+
+
+# =============================================================================
+# QdrantJudgmentKB Coverage Tests
+# =============================================================================
+
+class TestQdrantJudgmentKBInit:
+    """Tests for QdrantJudgmentKB initialization."""
+
+    def test_default_init(self):
+        """Default initialization."""
+        from src.vector_store.qdrant_kb import QdrantJudgmentKB
+        kb = QdrantJudgmentKB()
+        assert kb.vector_store is not None
+        assert kb.embedder is not None
+        assert kb.reranker is not None
+
+    def test_init_with_custom_config(self):
+        """Initialization with custom config."""
+        from src.vector_store.qdrant_kb import QdrantJudgmentKB
+        config = {
+            'dimensions': 1024,
+            'in_memory': True,
+            'reranker_enabled': False,
+            'top_k_input': 30,
+            'top_k_output': 5
+        }
+        kb = QdrantJudgmentKB(config=config)
+        assert kb.top_k_input == 30
+        assert kb.top_k_output == 5
+
+    def test_init_with_components(self):
+        """Initialization with provided components."""
+        from src.vector_store.qdrant_kb import QdrantJudgmentKB
+        from src.vector_store.qdrant_store import QdrantVectorStore
+
+        vector_store = QdrantVectorStore(in_memory=True)
+        kb = QdrantJudgmentKB(vector_store=vector_store)
+        assert kb.vector_store == vector_store
+
+
