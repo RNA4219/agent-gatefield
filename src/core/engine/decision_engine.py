@@ -6,6 +6,8 @@ This is the main entry point for gate decisions. It coordinates:
 - Scorer execution and composite score calculation
 - State determination based on thresholds
 - SLA handling, threshold versioning, and self-correction tracking
+
+Note: Helper functions moved to engine/helpers.py for maintainability.
 """
 
 import logging
@@ -40,6 +42,12 @@ from src.core.constants import (
     THRESHOLD_DIRECTION_BLOCK, THRESHOLD_DIRECTION_WARN,
     THRESHOLD_ANOMALY_BLOCK, THRESHOLD_ANOMALY_WARN, THRESHOLD_ANOMALY_SELF_CORRECT,
     THRESHOLD_COMPOSITE_WARN,
+)
+from .helpers import (
+    compute_centroid,
+    build_score_factors,
+    build_exemplar_refs,
+    build_static_gate_summary,
 )
 
 # Import split modules
@@ -263,13 +271,13 @@ class DecisionEngine:
         decision = decision_state.value
 
         # Step 5: Collect top factors as ScoreFactor objects
-        factors = self._build_score_factors(scorer_results, n=3)
+        factors = build_score_factors(scorer_results, n=3)
 
         # Step 6: Collect exemplar refs as ExemplarRef objects
-        exemplar_refs = self._build_exemplar_refs(scorer_results, max_refs=5)
+        exemplar_refs = build_exemplar_refs(scorer_results, max_refs=5)
 
         # Step 7: Build static_gate_summary from state_vector
-        static_gate_summary = self._build_static_gate_summary(state_vector)
+        static_gate_summary = build_static_gate_summary(state_vector, GATE_SUMMARY_RULES)
 
         # Step 8: Build action recommendation dict
         action = {
@@ -355,7 +363,7 @@ class DecisionEngine:
 
         # Constitution alignment
         if constitution_embeddings:
-            centroid = self._compute_centroid(constitution_embeddings)
+            centroid = compute_centroid(constitution_embeddings)
             results.append(
                 self.scorers['constitution_alignment'].score(
                     semantic_vector, centroid, constitution_docs
@@ -396,8 +404,8 @@ class DecisionEngine:
         trajectory = state_vector.get('trajectory', {})
         delta_semantic = trajectory.get('delta_semantic_vector', [])
         if delta_semantic and accepted_embeddings and rejected_embeddings:
-            accepted_centroid = self._compute_centroid(accepted_embeddings)
-            rejected_centroid = self._compute_centroid(rejected_embeddings)
+            accepted_centroid = compute_centroid(accepted_embeddings)
+            rejected_centroid = compute_centroid(rejected_embeddings)
             results.append(
                 self.scorers['direction'].score(
                     delta_semantic, accepted_centroid, rejected_centroid
@@ -447,24 +455,6 @@ class DecisionEngine:
         )
 
         return results
-
-    def _compute_centroid(self, embeddings: List[List[float]]) -> List[float]:
-        """
-        Compute centroid of embeddings.
-
-        Args:
-            embeddings: List of embedding vectors
-
-        Returns:
-            Centroid vector
-        """
-        if not embeddings:
-            return []
-
-        n = len(embeddings)
-        dims = len(embeddings[0])
-        centroid = [sum(e[i] for e in embeddings) / n for i in range(dims)]
-        return centroid
 
     def _determine_state(
         self,
@@ -806,152 +796,3 @@ class DecisionEngine:
             return 'medium'
 
         return 'low'
-
-    def _build_score_factors(
-        self,
-        scorer_results: List[ScorerResult],
-        n: int = 3
-    ) -> List[ScoreFactor]:
-        """
-        Build ScoreFactor objects from scorer results.
-
-        Args:
-            scorer_results: Individual scorer results
-            n: Number of top factors to return
-
-        Returns:
-            List of ScoreFactor objects sorted by contribution
-        """
-        # Sort by weighted_score (contribution) descending
-        sorted_results = sorted(
-            scorer_results,
-            key=lambda r: r.weighted_score,
-            reverse=True
-        )[:n]
-
-        factors = []
-        for r in sorted_results:
-            threshold = None
-            threshold_type = None
-
-            threshold_map = {
-                'taboo_proximity': (THRESHOLD_TABOO_BLOCK, THRESHOLD_TABOO_WARN),
-                'reject_similarity': (THRESHOLD_REJECT_BLOCK, THRESHOLD_REJECT_WARN),
-                'uncertainty': (THRESHOLD_JUDGE_STD_BLOCK, THRESHOLD_JUDGE_STD_WARN),
-            }
-
-            if r.name in threshold_map:
-                block_thresh, warn_thresh = threshold_map[r.name]
-                if r.score >= block_thresh:
-                    threshold = block_thresh
-                    threshold_type = 'block'
-                elif r.score >= warn_thresh:
-                    threshold = warn_thresh
-                    threshold_type = 'warn'
-
-            factors.append(ScoreFactor(
-                name=r.name,
-                value=r.score,
-                weight=r.weight,
-                contribution=r.weighted_score,
-                threshold=threshold,
-                threshold_type=threshold_type
-            ))
-
-        return factors
-
-    def _build_exemplar_refs(
-        self,
-        scorer_results: List[ScorerResult],
-        max_refs: int = 5
-    ) -> List[ExemplarRef]:
-        """
-        Build ExemplarRef objects from scorer results.
-
-        Args:
-            scorer_results: Individual scorer results
-            max_refs: Maximum number of refs to return
-
-        Returns:
-            List of ExemplarRef objects
-        """
-        refs = []
-
-        # Collect exemplar refs from all scorers
-        for r in scorer_results:
-            if hasattr(r, 'top_exemplar_refs') and r.top_exemplar_refs:
-                for exemplar in r.top_exemplar_refs:
-                    # exemplar can be string or dict depending on scorer implementation
-                    if isinstance(exemplar, dict):
-                        refs.append(ExemplarRef(
-                            doc_id=exemplar.get('doc_id', ''),
-                            axis_type=exemplar.get('axis_type', r.name.replace('_proximity', '').replace('_similarity', '')),
-                            similarity=exemplar.get('similarity', 0.0),
-                            version=exemplar.get('version'),
-                            text_excerpt=exemplar.get('text_excerpt')
-                        ))
-                    elif isinstance(exemplar, str):
-                        # Legacy string format - parse basic info
-                        refs.append(ExemplarRef(
-                            doc_id=exemplar,
-                            axis_type=r.name.replace('_proximity', '').replace('_similarity', ''),
-                            similarity=0.0
-                        ))
-
-        # Sort by similarity descending and limit
-        refs = sorted(refs, key=lambda x: x.similarity, reverse=True)[:max_refs]
-
-        return refs
-
-    def _build_static_gate_summary(self, state_vector: Dict) -> Dict:
-        """Build static_gate_summary using declarative GATE_SUMMARY_RULES."""
-        rule_violation = state_vector.get('rule_violation', {})
-        explicit_results = state_vector.get('static_gate_results') or state_vector.get('rule_results') or {}
-        gates_executed = []
-        hard_failures = []
-        warnings = []
-
-        for gate_name, result in explicit_results.items():
-            if gate_name not in gates_executed:
-                gates_executed.append(gate_name)
-            if not isinstance(result, dict):
-                continue
-            status = str(result.get('status', '')).lower()
-            count = int(result.get('count', 0) or 0)
-            severity = str(result.get('severity', '')).lower()
-            if status in {'fail', 'failed', 'error', 'deny', 'block'} or severity in {'critical', 'high'} and count > 0:
-                hard_failures.append({
-                    'gate_name': gate_name,
-                    'severity': severity or 'high',
-                    'evidence_ref': result.get('evidence_ref', f"{gate_name}://detected"),
-                    'rule_id': result.get('rule_id', gate_name)
-                })
-            elif status in {'warn', 'warning'} or count > 0:
-                warnings.append({'gate_name': gate_name, 'count': count or 1})
-
-        for rule in GATE_SUMMARY_RULES:
-            field = rule['field']
-            value = rule_violation.get(field, 0)
-
-            if value > 0:
-                if rule['gate'] not in gates_executed:
-                    gates_executed.append(rule['gate'])
-
-                if rule.get('type') == 'hard':
-                    failure = {
-                        'gate_name': rule['gate'],
-                        'severity': rule.get('severity', 'high'),
-                        'evidence_ref': f"{rule['gate']}://detected",
-                        'rule_id': rule.get('rule_id', field)
-                    }
-                    if failure not in hard_failures:
-                        hard_failures.append(failure)
-                elif rule.get('type') == 'warning':
-                    warnings.append({'gate_name': rule['gate'], 'count': value})
-
-        return {
-            'gates_executed': gates_executed,
-            'all_passed': len(hard_failures) == 0,
-            'hard_failures': hard_failures,
-            'warnings': warnings
-        }

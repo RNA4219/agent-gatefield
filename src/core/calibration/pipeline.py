@@ -23,12 +23,15 @@ from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime, timezone
 from collections import defaultdict
 
-from .exceptions import CalibrationError, InsufficientSamplesError, WeightValidationError
+from ..exceptions import CalibrationError, InsufficientSamplesError, WeightValidationError
 
 logger = logging.getLogger(__name__)
 
+# Import helpers
+from .helpers import calculate_ewma, calculate_uncertainty_score
+
 # Import constants
-from .constants import (
+from ..constants import (
     DEFAULT_SCORER_WEIGHTS,
     WEIGHT_CONSTRAINTS,
     DEFAULT_THRESHOLDS,
@@ -47,7 +50,7 @@ from .constants import (
 )
 
 # Import data classes
-from .dataclasses import (
+from ..dataclasses import (
     CalibrationResult,
     ThresholdVersion,
     DriftIndicators,
@@ -56,7 +59,7 @@ from .dataclasses import (
 )
 
 # Import threshold calibration functions
-from .threshold_calibration import (
+from ..threshold_calibration import (
     calibrate_taboo_threshold,
     calibrate_drift_threshold,
     calibrate_anomaly_percentile,
@@ -66,7 +69,7 @@ from .threshold_calibration import (
 )
 
 # Import drift detection functions
-from .drift_detection import (
+from ..drift_detection import (
     compute_drift_indicators,
     classify_drift_type,
     get_drift_response,
@@ -75,7 +78,7 @@ from .drift_detection import (
 )
 
 # Import anomaly calibration functions
-from .anomaly_calibration import (
+from ..anomaly_calibration import (
     calibrate_isolation_forest,
     calibrate_mahalanobis,
     matrix_inverse,
@@ -88,7 +91,7 @@ from .anomaly_calibration import (
 )
 
 # Import online calibration functions
-from .online_calibration import (
+from ..online_calibration import (
     incorporate_correction,
     check_calibration_trigger,
     compute_threshold_adjustment,
@@ -97,57 +100,6 @@ from .online_calibration import (
     get_calibration_priority,
     should_trigger_immediate_recalibration,
 )
-
-
-# Utility functions for backward compatibility
-def calculate_ewma(current_value: float, old_ewma: float, alpha: float = 0.1) -> float:
-    """
-    Calculate Exponentially Weighted Moving Average.
-
-    Used for drift score calculation.
-
-    Args:
-        current_value: Current observation
-        old_ewma: Previous EWMA value
-        alpha: Smoothing factor (default 0.1)
-
-    Returns:
-        Updated EWMA value
-    """
-    return alpha * current_value + (1 - alpha) * old_ewma
-
-
-def calculate_uncertainty_score(
-    judge_std: float,
-    self_confidence: float,
-    tool_error_rate: float,
-    evidence_gap: float
-) -> float:
-    """
-    Calculate uncertainty score from components.
-
-    Formula: uncertainty = 0.25 * norm_judge_std
-                       + 0.25 * (1 - self_confidence)
-                       + 0.25 * tool_error_rate
-                       + 0.25 * evidence_gap
-
-    All components should be normalized to [0, 1].
-
-    Args:
-        judge_std: Judge standard deviation (normalized)
-        self_confidence: Self-confidence score (0-1)
-        tool_error_rate: Tool error rate (0-1)
-        evidence_gap: Evidence gap score (0-1)
-
-    Returns:
-        Combined uncertainty score
-    """
-    return (
-        0.25 * judge_std +
-        0.25 * (1 - self_confidence) +
-        0.25 * tool_error_rate +
-        0.25 * evidence_gap
-    )
 
 
 class CalibrationPipeline:
