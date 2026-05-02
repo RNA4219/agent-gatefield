@@ -36,19 +36,19 @@ code-to-gate 分析で検出された技術的債務の記録と対応計画。
 **判定**: 進行中 - pipeline.py still above 500 lines
 **次段階**: Consider further decomposition
 
-### 1.3 src/encoder/embedding_worker.py (867 lines)
+### 1.3 src/encoder/embedding_worker.py → embedding_worker/ package (分割済み: 2026-05-03)
 
-**現状**: Embedding worker with multi-provider support.
-
-**分割計画**:
-| 新モジュール | 内容 | 行数見積 |
+**分割後**:
+| Module | 行数 | 内容 |
 |---|---|---|
-| `embedding_worker/providers.py` | Provider-specific implementations | ~350 |
-| `embedding_worker/batching.py` | Batch processing logic | ~200 |
-| `embedding_worker/cache.py` | Embedding cache management | ~200 |
-| `embedding_worker/__init__.py` | Worker class, public API | ~100 |
+| embedding_worker/constants.py | 20 | Default model, runtime constants |
+| embedding_worker/types.py | 42 | EmbeddingJob, EmbeddingConfig dataclasses |
+| embedding_worker/worker.py | 663 | EmbeddingWorker class |
+| embedding_worker/reembed.py | 152 | ReEmbedJob class |
+| embedding_worker/config.py | 41 | create_embedding_worker_from_config factory |
+| embedding_worker/__init__.py | 39 | Package exports |
 
-**優先度**: Low (Q3)
+**判定**: 完了 - core worker.py at 663 lines (acceptable for core class)
 
 ### 1.4 cli/gate_cli.py (801 lines)
 
