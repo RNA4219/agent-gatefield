@@ -26,7 +26,7 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: uv sync --extra dev --offline
+        run: uv sync --extra dev
 
       - name: Run tests
         run: uv run pytest tests -v --tb=short --cov=src --cov-report=xml --cov-report=term-missing
@@ -50,7 +50,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --extra dev --offline
+        run: uv sync --extra dev
 
       - name: Check import ordering
         run: uv run python -c "import isort; print('isort not installed, skipping')" || true
@@ -70,7 +70,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --offline
+        run: uv sync
 
       - name: Validate pyproject.toml
         run: uv run python -c "import tomllib; tomllib.load(open('pyproject.toml', 'rb'))"
