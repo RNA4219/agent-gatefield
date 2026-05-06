@@ -8,12 +8,18 @@ Backward compatibility: Also exports types from src.core.types that were
 previously imported directly from src.core.engine.
 """
 
-from .decision_engine import DecisionEngine, STATE_RULES, GATE_SUMMARY_RULES
+from .decision_engine import DecisionEngine, GATE_SUMMARY_RULES
 from .helpers import (
     compute_centroid,
     build_score_factors,
     build_exemplar_refs,
     build_static_gate_summary,
+)
+from .phases import (
+    STATE_RULES,
+    run_all_scorers,
+    determine_gate_state,
+    matches_rule,
 )
 
 # Re-export types for backward compatibility (previously imported from src.core.engine)
@@ -31,4 +37,7 @@ __all__ = [
     'build_score_factors',
     'build_exemplar_refs',
     'build_static_gate_summary',
+    'run_all_scorers',
+    'determine_gate_state',
+    'matches_rule',
 ]

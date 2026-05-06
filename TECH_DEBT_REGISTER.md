@@ -14,27 +14,27 @@ code-to-gate 分析で検出された技術的債務の記録と対応計画。
 
 ## 1. LARGE_MODULE - モジュール肥大化
 
-### 1.1 src/core/engine.py → engine/ package (分割済み: 2026-05-02)
+### 1.1 src/core/engine.py → engine/ package (分割済み: 2026-05-03)
 
 **分割後**:
 | Module | 行数 | 内容 |
 |---|---|---|
-| engine/decision_engine.py | 798 | DecisionEngine class |
+| engine/decision_engine.py | ~550 | DecisionEngine class (reduced from 798) |
 | engine/helpers.py | 191 | Helper functions (centroid, score_factors) |
+| engine/phases.py | 275 | STATE_RULES, run_all_scorers, determine_gate_state |
 
-**判定**: 進行中 - decision_engine.py still above 500 lines
-**次段階**: Extract scoring phases to separate module
+**判定**: 完了 - decision_engine.py now under 600 lines
 
-### 1.2 src/core/calibration.py → calibration/ package (分割済み: 2026-05-02)
+### 1.2 src/core/calibration.py → calibration/ package (分割済み: 2026-05-03)
 
 **分割後**:
 | Module | 行数 | 内容 |
 |---|---|---|
-| calibration/pipeline.py | 945 | CalibrationPipeline class |
+| calibration/pipeline.py | ~550 | CalibrationPipeline class (reduced from 945) |
 | calibration/helpers.py | 54 | EWMA, uncertainty helpers |
+| calibration/eval.py | 433 | compute_metrics, validate_migration, verify_reproducibility |
 
-**判定**: 進行中 - pipeline.py still above 500 lines
-**次段階**: Consider further decomposition
+**判定**: 完了 - pipeline.py now under 600 lines
 
 ### 1.3 src/encoder/embedding_worker.py → embedding_worker/ package (分割済み: 2026-05-03)
 

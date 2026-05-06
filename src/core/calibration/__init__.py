@@ -4,12 +4,24 @@ Calibration module - Threshold calibration pipeline.
 This module provides calibration utilities for the state space gate system.
 All implementation details are in the submodules:
 - helpers.py: EWMA and uncertainty calculations
+- eval.py: Evaluation and metrics computation
 - pipeline.py: Main CalibrationPipeline class
 
 Backward compatibility: Re-exports all items from parent directory modules.
 """
 
 from .helpers import calculate_ewma, calculate_uncertainty_score
+from .eval import (
+    compute_metrics,
+    compute_auc,
+    validate_migration,
+    verify_reproducibility,
+    validate_weights,
+    compute_weighted_score,
+    predict_from_thresholds,
+    load_dataset,
+    run_offline_evaluation,
+)
 from .pipeline import CalibrationPipeline
 
 # Re-export constants for backward compatibility
@@ -72,4 +84,14 @@ __all__ = [
     "normalize_feature",
     "calculate_ewma",
     "calculate_uncertainty_score",
+    # Evaluation functions (from eval.py)
+    "compute_metrics",
+    "compute_auc",
+    "validate_migration",
+    "verify_reproducibility",
+    "validate_weights",
+    "compute_weighted_score",
+    "predict_from_thresholds",
+    "load_dataset",
+    "run_offline_evaluation",
 ]
