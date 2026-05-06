@@ -11,146 +11,142 @@ from src.core.engine import (
     GateState,
     STATE_RULES,
 )
+from src.core.engine.helpers import compute_centroid
+from src.core.engine.phases import matches_rule, determine_gate_state
 
 
 class TestEngineComputeCentroid:
-    """Tests for _compute_centroid method."""
+    """Tests for compute_centroid function."""
 
     def test_compute_centroid_empty(self):
         """Empty embeddings returns empty list."""
-        engine = DecisionEngine({})
-        result = engine._compute_centroid([])
+        result = compute_centroid([])
         assert result == []
 
     def test_compute_centroid_single(self):
         """Single embedding returns same vector."""
-        engine = DecisionEngine({})
         embedding = [0.5] * 1024
-        result = engine._compute_centroid([embedding])
+        result = compute_centroid([embedding])
         assert result == embedding
 
     def test_compute_centroid_two(self):
         """Two embeddings average."""
-        engine = DecisionEngine({})
         emb1 = [1.0] * 1024
         emb2 = [0.0] * 1024
-        result = engine._compute_centroid([emb1, emb2])
+        result = compute_centroid([emb1, emb2])
         assert len(result) == 1024
         assert all(v == 0.5 for v in result)
 
     def test_compute_centroid_multiple(self):
         """Multiple embeddings average."""
-        engine = DecisionEngine({})
         embeddings = [[i] * 1024 for i in range(1, 4)]  # [1,1,1], [2,2,2], [3,3,3]
-        result = engine._compute_centroid(embeddings)
+        result = compute_centroid(embeddings)
         assert len(result) == 1024
         assert all(abs(v - 2.0) < 0.001 for v in result)
 
 
 class TestEngineMatchesRule:
-    """Tests for _matches_rule method."""
+    """Tests for matches_rule function."""
 
     def test_matches_rule_composite_ge(self):
         """Composite rule with ge operator."""
-        engine = DecisionEngine({})
         rule = {'composite': True, 'threshold': 0.5}
-        assert engine._matches_rule(rule, {}, 0.6, 0.0) is True
-        assert engine._matches_rule(rule, {}, 0.4, 0.0) is False
+        assert matches_rule(rule, {}, 0.6, 0.0, {}) is True
+        assert matches_rule(rule, {}, 0.4, 0.0, {}) is False
 
     def test_matches_rule_composite_threshold(self):
         """Composite rule threshold."""
-        engine = DecisionEngine({})
         rule = {'composite': True, 'threshold': 0.65}
-        assert engine._matches_rule(rule, {}, 0.65, 0.0) is True
-        assert engine._matches_rule(rule, {}, 0.64, 0.0) is False
+        assert matches_rule(rule, {}, 0.65, 0.0, {}) is True
+        assert matches_rule(rule, {}, 0.64, 0.0, {}) is False
 
     def test_matches_rule_scorer_ge(self):
         """Scorer rule with ge operator."""
-        engine = DecisionEngine({})
         rule = {'scorer': 'taboo_proximity', 'threshold': 0.80}
         scores = {'taboo_proximity': 0.85}
-        assert engine._matches_rule(rule, scores, 0.0, 0.0) is True
-        assert engine._matches_rule(rule, {'taboo_proximity': 0.75}, 0.0, 0.0) is False
+        assert matches_rule(rule, scores, 0.0, 0.0, {}) is True
+        assert matches_rule(rule, {'taboo_proximity': 0.75}, 0.0, 0.0, {}) is False
 
     def test_matches_rule_scorer_le(self):
         """Scorer rule with le operator."""
-        engine = DecisionEngine({})
         rule = {'scorer': 'direction', 'threshold': 0.5, 'op': 'le'}
         scores = {'direction': 0.3}
-        assert engine._matches_rule(rule, scores, 0.0, 0.0) is True
+        assert matches_rule(rule, scores, 0.0, 0.0, {}) is True
         scores = {'direction': 0.6}
-        assert engine._matches_rule(rule, scores, 0.0, 0.0) is False
+        assert matches_rule(rule, scores, 0.0, 0.0, {}) is False
 
     def test_matches_rule_scorer_lt(self):
         """Scorer rule with lt operator."""
-        engine = DecisionEngine({})
         rule = {'scorer': 'uncertainty', 'threshold': 0.2, 'op': 'lt'}
         scores = {'uncertainty': 0.1}
-        assert engine._matches_rule(rule, scores, 0.0, 0.0) is True
+        assert matches_rule(rule, scores, 0.0, 0.0, {}) is True
         scores = {'uncertainty': 0.2}
-        assert engine._matches_rule(rule, scores, 0.0, 0.0) is False
+        assert matches_rule(rule, scores, 0.0, 0.0, {}) is False
 
     def test_matches_rule_tool_error_rate(self):
         """Field-based tool_error_rate rule."""
-        engine = DecisionEngine({})
         rule = {'field': 'tool_error_rate', 'threshold': 0.1}
-        assert engine._matches_rule(rule, {}, 0.0, 0.15) is True
-        assert engine._matches_rule(rule, {}, 0.0, 0.05) is False
+        assert matches_rule(rule, {}, 0.0, 0.15, {}) is True
+        assert matches_rule(rule, {}, 0.0, 0.05, {}) is False
 
     def test_matches_rule_threshold_string(self):
         """Threshold as string key."""
-        engine = DecisionEngine({'thresholds': {'custom_threshold': 0.5}})
+        thresholds = {'custom_threshold': 0.5}
         rule = {'scorer': 'test', 'threshold': 'custom_threshold'}
         scores = {'test': 0.6}
-        assert engine._matches_rule(rule, scores, 0.0, 0.0) is True
+        assert matches_rule(rule, scores, 0.0, 0.0, thresholds) is True
 
     def test_matches_rule_missing_scorer(self):
         """Missing scorer returns False."""
-        engine = DecisionEngine({})
         rule = {'scorer': 'nonexistent', 'threshold': 0.5}
-        assert engine._matches_rule(rule, {}, 0.0, 0.0) is False
+        assert matches_rule(rule, {}, 0.0, 0.0, {}) is False
 
     def test_matches_rule_scorer_with_default_op(self):
         """Scorer rule with default ge operator."""
-        engine = DecisionEngine({})
         rule = {'scorer': 'test', 'threshold': 0.5}
         scores = {'test': 0.5}
-        assert engine._matches_rule(rule, scores, 0.0, 0.0) is True
+        assert matches_rule(rule, scores, 0.0, 0.0, {}) is True
 
 
 class TestEngineDetermineState:
-    """Tests for _determine_state method."""
+    """Tests for determine_gate_state function."""
 
     def test_determine_state_pass(self):
         """Low scores result in pass."""
-        engine = DecisionEngine({})
         from src.scorers import ScorerResult
         scorer_results = [
             ScorerResult(name='taboo_proximity', score=0.1, weight=0.3, weighted_score=0.03, top_exemplar_refs=[], explanation=''),
             ScorerResult(name='reject_similarity', score=0.1, weight=0.2, weighted_score=0.02, top_exemplar_refs=[], explanation=''),
         ]
         state_vector = {'uncertainty': {'judge_std': 0.01}}
-        state, action = engine._determine_state(0.3, scorer_results, state_vector, 'v1', 'v1')
+        state, action = determine_gate_state(
+            0.3, scorer_results, state_vector, {}, {}, 'v1', 'v1',
+            GateState, DecisionResult
+        )
         assert state == GateState.PASS
 
     def test_determine_state_with_high_taboo(self):
         """High taboo score triggers block."""
-        engine = DecisionEngine({})
         from src.scorers import ScorerResult
         scorer_results = [
             ScorerResult(name='taboo_proximity', score=0.95, weight=0.3, weighted_score=0.285, top_exemplar_refs=[], explanation=''),
         ]
         state_vector = {'uncertainty': {}}
-        state, action = engine._determine_state(0.95, scorer_results, state_vector, 'v1', 'v1')
+        state, action = determine_gate_state(
+            0.95, scorer_results, state_vector, {}, {}, 'v1', 'v1',
+            GateState, DecisionResult
+        )
         assert state in (GateState.BLOCK, GateState.HOLD)
 
     def test_determine_state_with_tool_error(self):
         """High tool_error_rate triggers action."""
-        engine = DecisionEngine({})
         from src.scorers import ScorerResult
         scorer_results = []
         state_vector = {'uncertainty': {'tool_error_rate': 0.5}}
-        state, action = engine._determine_state(0.3, scorer_results, state_vector, 'v1', 'v1')
+        state, action = determine_gate_state(
+            0.3, scorer_results, state_vector, {}, {}, 'v1', 'v1',
+            GateState, DecisionResult
+        )
         # High tool error should trigger some state
         assert state in (GateState.BLOCK, GateState.HOLD, GateState.WARN, GateState.PASS)
 
